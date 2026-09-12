@@ -1,0 +1,8 @@
+build/
+/l3m
+libl3m.so
+tests/test_kernels
+*.l3m
+.venv/
+__pycache__/
+dist/

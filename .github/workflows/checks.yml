@@ -1,0 +1,82 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+        python: ["3.11", "3.14"]
+    env:
+      CC: ${{ matrix.cc }} -Werror
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: make all test bench
+      - run: uv sync --extra dev
+      - run: uv run pytest -rs
+
+  avx512:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: petarpetrovt/setup-sde@6d2773bc0ef3005fd52e0ae0bb91782321793aec   # v6.0
+      - run: make all tests/test_kernels
+      - run: uv sync --extra dev
+      - shell: bash
+        run: |
+          "$SDE_PATH/sde64" -cpx -- tests/test_kernels | tee out.txt
+          L3M_SKIP_MAKE=1 "$SDE_PATH/sde64" -cpx -- .venv/bin/python -m pytest -k avx512 -rs | tee -a out.txt
+          ! grep -qi skip out.txt
+
+  sanitize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: make CC="gcc -fsanitize=address,undefined -fno-sanitize-recover=undefined" CFLAGS="-O1 -g -march=x86-64-v3" all test
+      - run: uv sync --extra dev
+      - run: LD_PRELOAD=$(gcc -print-file-name=libasan.so) ASAN_OPTIONS=detect_leaks=0 uv run pytest -rs
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uvx ruff check
+
+  network:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('models/*.py') }}
+      - run: uv sync --extra dev --extra hf
+      - run: uv run pytest -m network -rs

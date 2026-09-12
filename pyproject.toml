@@ -1,0 +1,36 @@
+[project]
+name = "l3m"
+version = "0.1.0"
+description = "Tiny language models that never touch DRAM"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["numpy", "huggingface_hub"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+hf = ["torch", "transformers", "sentencepiece", "protobuf"]
+
+[project.scripts]
+l3m-export = "l3m.export:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not network' --strict-markers"
+markers = ["network: downloads real model weights"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/l3m"]
+
+[tool.ruff]
+line-length = 170
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E702", "B905"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["l3m", "tests"]

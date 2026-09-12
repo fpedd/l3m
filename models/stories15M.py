@@ -1,0 +1,6 @@
+"""stories15M: Karpathy's 6-layer TinyStories Llama from llama2.c."""
+source = "llama2c"
+repo = "karpathy/tinyllamas"
+weights = "stories15M.bin"
+dtype = "bf16"
+head_dtype = "bf16"
