@@ -1,0 +1,6 @@
+"""stories42M: Karpathy's 8-layer TinyStories Llama from llama2.c."""
+source = "llama2c"
+repo = "karpathy/tinyllamas"
+weights = "stories42M.bin"
+dtype = "q8_0"
+head_dtype = "q8_0"
