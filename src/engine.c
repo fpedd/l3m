@@ -595,7 +595,8 @@ int l3m_perf_read(l3m_model *m, l3m_perf *out) {
     out->ns_wait = dwait / tokens;
     out->ns_compute = out->ns_token - out->ns_wait;
     out->bytes_token = (double)m->weight_bytes;
-    out->l2_bytes = (double)m->hw.l2_bytes * m->n;
+    out->l2_bytes = 0;
+    for (int r = 0; r < m->n; r++) out->l2_bytes += (double)l3m_hw_l2(&m->hw, m->w[r].cpu);
     if (m->hc) {
         l3m_counters c;
         l3m_hwcounters_read(m->hc, &c);

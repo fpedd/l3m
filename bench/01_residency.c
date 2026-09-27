@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "hw.h"
 #include "l3m.h"
 #include "perf.h"
@@ -88,7 +89,8 @@ int main(int argc, char **argv) {
         free(j);
     }
     free(list);
-    if (missing) printf("(nan: counters need root for perf events, and a mounted resctrl for occupancy)\n");
+    if (missing) printf(geteuid() ? "(nan: counters need root for perf events, and a mounted resctrl for occupancy)\n"
+                                  : "(nan: no amd_l3/amd_umc PMU, or no mounted resctrl for occupancy)\n");
     l3m_pool_stop(pool);
     l3m_hwcounters_close(hc);
     return 0;

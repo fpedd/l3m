@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "l3m.h"
 #include "model.h"
 
@@ -118,7 +119,7 @@ static void perf_line(l3m_model *m, FILE *out) {
     if (!isnan(p.dram_bytes)) fprintf(out, "  DRAM %.2f MB/tok", p.dram_bytes / 1e6);
     if (!isnan(p.energy_j)) fprintf(out, "  %.2f mJ/tok", p.energy_j * 1e3);
     if (!isnan(p.llc_occupancy)) fprintf(out, "  LLC %.1f MiB", p.llc_occupancy / MiB);
-    if (isnan(p.dram_bytes)) fprintf(out, "  (DRAM, L3 and energy counters: run as root)");
+    if (isnan(p.dram_bytes)) fprintf(out, geteuid() ? "  (DRAM, L3 and energy counters: run as root)" : "  (no DRAM counters: they need the amd_umc PMU)");
     fprintf(out, "\n");
     fprintf(out, "weights: %.1f MiB per token at %.0f GB/s", p.bytes_token / MiB, p.bytes_token / p.ns_token);
     if (!isnan(p.dram_bytes)) fprintf(out, ", DRAM reads %.1f%% of that", 100 * p.dram_bytes / p.bytes_token);
