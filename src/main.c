@@ -79,7 +79,7 @@ static args parse(int argc, char **argv) {
     return a;
 }
 
-static l3m_model *load(const args *a, int ref) {
+static l3m_model *try_load(const args *a, int ref) {
     static int cpus[256];
     l3m_opts o = { .reference = ref, .force = a->force, .verbose = a->verbose, .ctx = a->ctx, .cold = a->cold };
     if (a->cores) {
@@ -87,7 +87,11 @@ static l3m_model *load(const args *a, int ref) {
         if (o.n_cpus <= 0) { fprintf(stderr, "l3m: bad --cores %s\n", a->cores); exit(2); }
         o.cpus = cpus;
     }
-    l3m_model *m = l3m_load(a->model, &o);
+    return l3m_load(a->model, &o);
+}
+
+static l3m_model *load(const args *a, int ref) {
+    l3m_model *m = try_load(a, ref);
     if (!m) exit(1);
     return m;
 }
@@ -181,16 +185,19 @@ static int cmd_chat(const args *a) {
     return 0;
 }
 
+static void cell(double v, int prec) { if (isnan(v)) printf(" - |"); else printf(" %.*f |", prec, v); }
+
 static int cmd_bench(const args *a) {
     if (a->max_new < 1) { fprintf(stderr, "l3m: bench needs -n 1 or more\n"); return 2; }
-    int md = a->md || a->n_models > 1;
+    int md = a->md || a->n_models > 1, failed = 0;
     if (md) {
         printf("| model | tok/s | us/tok | compute | wait | GB/s | DRAM %% | LLC MiB | mJ/tok |\n");
         printf("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n");
     }
     for (int i = 0; i < a->n_models; i++) {
         args one = *a; one.model = a->models[i];
-        l3m_model *m = load(&one, a->ref);
+        l3m_model *m = md ? try_load(&one, a->ref) : load(&one, a->ref);
+        if (!m) { printf("| %s | load failed |\n", one.model); failed = 1; continue; }
         int32_t bos = l3m_bos(m) < 0 ? 0 : l3m_bos(m), out[8192];
         sink s = { m, out, 0 };
         l3m_perf p;
@@ -202,13 +209,14 @@ static int cmd_bench(const args *a) {
         if (!md) perf_line(m, stdout);
         else if (l3m_perf_read(m, &p)) printf("| %s | no tokens |\n", l3m_describe(m));
         else {
-            printf("| %s | %.0f | %.1f | %.1f | %.1f | %.0f | %.1f | %.1f | %.2f |\n", l3m_describe(m),
-                   1e9 / p.ns_token, p.ns_token / 1e3, p.ns_compute / 1e3, p.ns_wait / 1e3, p.bytes_token / p.ns_token,
-                   100 * p.dram_bytes / p.bytes_token, p.llc_occupancy / MiB, p.energy_j * 1e3);
+            printf("| %s | %.0f | %.1f | %.1f | %.1f |", l3m_describe(m), 1e9 / p.ns_token, p.ns_token / 1e3, p.ns_compute / 1e3, p.ns_wait / 1e3);
+            if (p.bytes_token == 0) p.bytes_token = NAN;   // reference
+            cell(p.bytes_token / p.ns_token, 0); cell(100 * p.dram_bytes / p.bytes_token, 1);
+            cell(p.llc_occupancy / MiB, 1); cell(p.energy_j * 1e3, 2); printf("\n");
         }
         l3m_free(m);
     }
-    return 0;
+    return failed;
 }
 
 // KL(reference || fast) of the next-token distributions, in nats.

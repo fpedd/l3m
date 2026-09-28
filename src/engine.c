@@ -191,19 +191,19 @@ static void job_build(l3m_pool *p, int rank, void *arg) {   // on the owning cor
     if (w->arena) build_worker(m, w);
 }
 
-// Vocab tiles go greedily to the rank with the fewest resident bytes.
+// Vocab tiles go greedily to the rank with the most budget left.
 static void deal_vocab(l3m_model *m) {
-    size_t tb = l3m_tile_bytes((int)m->lm_head->dtype, m->dim), bytes[L3M_MAX_CORES];
+    double tb = (double)l3m_tile_bytes((int)m->lm_head->dtype, m->dim), room[L3M_MAX_CORES];
     int count[L3M_MAX_CORES] = {0};
     for (int r = 0; r < m->n; r++) {
         m->w[r].v_lo = m->w[r].v_hi = 0;
         build_worker(m, &m->w[r]);
-        bytes[r] = m->w[r].arena_used;
+        room[r] = (double)l3m_hw_nominal(&m->hw, m->w[r].cpu) * L3M_RESIDENT_FRACTION - (double)m->w[r].arena_used;
     }
     for (int t = 0; t < tiles_of(m->vocab); t++) {
         int r = 0;
-        for (int q = 1; q < m->n; q++) if (bytes[q] < bytes[r]) r = q;
-        bytes[r] += tb; count[r]++;
+        for (int q = 1; q < m->n; q++) if (room[q] > room[r]) r = q;
+        room[r] -= tb; count[r]++;
     }
     int lo = 0;
     for (int r = 0; r < m->n; r++) {

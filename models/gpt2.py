@@ -2,5 +2,5 @@
 source = "hf_gpt2"
 repo = "openai-community/gpt2"
 weights = None
-dtype = "mxfp4"
-head_dtype = "mxfp4"
+dtype = "q4_0"
+head_dtype = "q8_0"
