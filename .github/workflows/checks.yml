@@ -32,6 +32,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: make all test bench
+      - run: ./l3m hw
       - run: uv sync --extra dev
       - run: uv run pytest -rs
 

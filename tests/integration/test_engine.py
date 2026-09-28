@@ -1,5 +1,6 @@
 import ctypes as C
 import importlib.util
+import re
 import subprocess
 from pathlib import Path
 
@@ -91,9 +92,10 @@ def test_cli_help_and_usage_errors(cli, exports):
     assert "tok/s" in run(cli, "bench", "-n", 2, "--force", path)
 
 
-def test_load_refuses_over_budget(tmp_path):
+def test_load_refuses_over_budget(cli, tmp_path):
+    budget = max(map(float, re.findall(r"([\d.]+) budget, cpus", run(cli, "hw"))))
     spec = tiny_spec()
-    spec.dim, spec.ffn, spec.n_layers = 512, 2048, 4
+    spec.dim, spec.ffn, spec.n_layers = 512, 2048, int(budget // 12) + 2   # the FFN alone is 12 MiB per layer
     export.write(export.load_model(spec), "f32", "f32", tmp_path / "big.l3m")
     with pytest.raises(RuntimeError):
         l3m.Model(tmp_path / "big.l3m", cpus=cores(1))
