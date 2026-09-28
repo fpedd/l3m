@@ -72,6 +72,11 @@ def test_cli_chat_and_bench(cli, exports):
     assert len(run(cli, "bench", path, "--force", "--md", "-n", 4).splitlines()) == 3
 
 
+def test_cli_bench_table_survives_a_bad_file(cli, exports):
+    rows = run(cli, "bench", "/nonexistent.l3m", exports[("tiny_llama", "q8_0")], "--ref", "-n", 4, code=1).splitlines()
+    assert rows[2] == "| /nonexistent.l3m | load failed |" and rows[3].startswith("| tiny_llama") and "nan" not in rows[3]
+
+
 def test_cli_help_and_usage_errors(cli, exports):
     assert run(cli, "-h").startswith("usage:")
     path = exports[("tiny_llama", "f32")]

@@ -13,7 +13,7 @@ Each core of a modern desktop CPU reads its L2 and L3 at around 100 GB/s, so 16 
 together stream about 1.5 TB/s. Dual-channel DDR5 delivers 60 to 90 GB/s, shared by all of them.
 l3m shards every weight matrix across the cores until each shard fits in its core's cache,
 then streams the weights from there on every token. For models that fit, token generation
-runs 3 to 5 times faster than llama.cpp on the same cores.
+runs 3 to 5 times faster than llama.cpp on the same cores. l3m runs on Linux, on x86-64 CPUs with AVX2.
 
 ## Quick start
 
@@ -35,21 +35,22 @@ print(prompt + response)
 
 `models/` holds specs for various models, including stories15M and SmolLM2-135M. To make sure a model
 really runs from cache, the loader refuses a model that does not fit the cache budget. If you hit
-that limit, `--ctx 128` shrinks the KV cache, and `--force` loads the model anyway.
+that limit, `--ctx 128` shrinks the KV cache, and `--force` loads the model anyway. `./l3m hw` shows
+each core's budget, and `./l3m check stories15M.l3m` compares the output against the fp32 reference.
 
 ## Results
 
 The speedup holds as long as the model fits in cache. Once it outgrows the cache, more and more
 of its weights come from DRAM, and the lead shrinks toward what the memory bus allows.
 
-| model | cores | l3m tok/s | llama.cpp tok/s | speedup | from DRAM |
-|---|---:|---:|---:|---:|---:|
-| stories15M bf16 | 8 | 15,300 | 3,180 | 4.8x | 1.1% |
-| stories15M q8_0 | 8 | 20,300 | 5,200 | 3.9x | 0.5% |
-| stories42M q8_0 | 16 | 10,700 | 3,120 | 3.4x | 1.6% |
-| stories110M q4_0, ctx 128 | 16 | 5,800 | 1,340 | 4.3x | 3.3% |
-| SmolLM2-135M q4_0, ctx 256, forced | 16 | 1,590 | 700 | 2.3x | 38% |
-| SmolLM2-135M q8_0, ctx 256, forced | 16 | 530 | 430 | 1.2x | 72% |
+| model                              | cores | l3m tok/s | llama.cpp tok/s | speedup | from DRAM |
+| ---------------------------------- | ----: | --------: | --------------: | ------: | --------: |
+| stories15M bf16                    |     8 |    15,300 |           3,180 |    4.8x |      1.1% |
+| stories15M q8_0                    |     8 |    20,300 |           5,200 |    3.9x |      0.5% |
+| stories42M q8_0                    |    16 |    10,700 |           3,120 |    3.4x |      1.6% |
+| stories110M q4_0, ctx 128          |    16 |     5,800 |           1,340 |    4.3x |      3.3% |
+| SmolLM2-135M q4_0, ctx 256, forced |    16 |     1,590 |             700 |    2.3x |       38% |
+| SmolLM2-135M q8_0, ctx 256, forced |    16 |       530 |             430 |    1.2x |       72% |
 
 Measured on a Ryzen 9 7950X (16 cores, 2 x 32 MiB L3, DDR5-5600): 256 greedy tokens,
 median of 7 runs, `sudo ./l3m bench <file> --cores 0-7 -n 256` (or `0-15`). Every model is
@@ -74,6 +75,14 @@ The same idea drives some inference accelerators, which skip off-chip memory and
 weights in on-chip SRAM. The best-known example is Groq, whose technology NVIDIA licensed in
 late 2025. For a deep dive into its architecture, see
 [Inside Groq LPU Architecture](https://github.com/zartbot/blog/issues/4).
+
+## Tests
+
+```bash
+make test                                                  # kernels, then their throughput
+uv sync --extra dev && uv run pytest                       # engine, exporter, tokenizer
+uv sync --extra dev --extra hf && uv run pytest -m network # real weights against transformers
+```
 
 ## License
 

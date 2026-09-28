@@ -129,7 +129,7 @@ size_t l3m_hw_nominal(const l3m_hw *hw, int cpu) {
 
 // One line per L3 group, then one per distinct L2 share within it (P- and E-cores on hybrid parts).
 void l3m_hw_print(const l3m_hw *hw, FILE *out) {
-    fprintf(out, "%s: %d cores, %d L3 groups\n", hw->name, hw->n_cores, hw->n_groups);
+    fprintf(out, "%s: %d cores, %d L3 group%s\n", hw->name, hw->n_cores, hw->n_groups, hw->n_groups == 1 ? "" : "s");
     for (int g = 0; g < hw->n_groups; g++) {
         double group = 0;
         for (int i = 0; i < hw->n_cores; i++) if (hw->core[i].group == g) group += (double)l3m_hw_nominal(hw, hw->core[i].cpu);

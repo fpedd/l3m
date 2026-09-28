@@ -2,5 +2,5 @@
 source = "hf_llama"
 repo = "amd/AMD-Llama-135m"
 weights = None
-dtype = "q4_0"
-head_dtype = "q4_0"
+dtype = "q8_0"
+head_dtype = "q8_0"

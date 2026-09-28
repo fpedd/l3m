@@ -164,7 +164,7 @@ static void throughput(const l3m_kernels *kt, int dtype) {
     size_t tb = l3m_tile_bytes(dtype, k);
     G.kt = kt; G.dtype = dtype; G.k = k; G.ntiles = (int)((3u << 20) / tb);
     size_t bytes = G.ntiles * tb;
-    G.tiles = aligned_alloc(64, bytes); memset(G.tiles, 1, bytes);
+    G.tiles = aligned_alloc(64, bytes); memset(G.tiles, 0x3F, bytes);   // normal floats in every dtype
     G.y = malloc(G.ntiles * L3M_TILE * 4);
     float *x = malloc(k * 4); void *scratch = malloc(2 * k);
     for (int i = 0; i < k; i++) x[i] = frand();
