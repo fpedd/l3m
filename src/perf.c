@@ -3,8 +3,8 @@
 #include <errno.h>
 #include <linux/perf_event.h>
 #include <math.h>
+#include <pthread.h>
 #include <signal.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,7 +107,8 @@ static int write_str(const char *path, const char *s) {
     return fclose(f) == 0 && ok ? 0 : -1;
 }
 
-static atomic_int mon_users;   // open counter sets in this process, which share one group
+static int mon_users;   // open counter sets in this process, which share one group
+static pthread_mutex_t mon_lock = PTHREAD_MUTEX_INITIALIZER;   // so a last leave cannot remove a group a join just filled
 
 static void mon_group_sweep(void) {   // remove groups of processes that died without closing
     DIR *d = opendir(RESCTRL "/mon_groups");
@@ -122,9 +123,8 @@ static void mon_group_sweep(void) {   // remove groups of processes that died wi
     closedir(d);
 }
 
-static void mon_group_join(char *group, size_t n) {   // group: the mon_data directory to read, root if unprivileged
-    snprintf(group, n, RESCTRL "/mon_data");
-    if (atomic_fetch_add(&mon_users, 1) == 0) mon_group_sweep();
+static void mon_group_add(char *group, size_t n) {
+    if (mon_users++ == 0) mon_group_sweep();
     char dir[256], path[512], tid[300];
     snprintf(dir, sizeof dir, RESCTRL "/mon_groups/l3m.%d", getpid());
     if (mkdir(dir, 0755) && errno != EEXIST) return;
@@ -140,11 +140,21 @@ static void mon_group_join(char *group, size_t n) {   // group: the mon_data dir
     snprintf(group, n, "%s/mon_data", dir);
 }
 
+static void mon_group_join(char *group, size_t n) {   // group: the mon_data directory to read, root if unprivileged
+    snprintf(group, n, RESCTRL "/mon_data");
+    pthread_mutex_lock(&mon_lock);
+    mon_group_add(group, n);
+    pthread_mutex_unlock(&mon_lock);
+}
+
 static void mon_group_leave(void) {
-    if (atomic_fetch_sub(&mon_users, 1) != 1) return;
-    char dir[256];
-    snprintf(dir, sizeof dir, RESCTRL "/mon_groups/l3m.%d", getpid());
-    rmdir(dir);
+    pthread_mutex_lock(&mon_lock);
+    if (--mon_users == 0) {
+        char dir[256];
+        snprintf(dir, sizeof dir, RESCTRL "/mon_groups/l3m.%d", getpid());
+        rmdir(dir);
+    }
+    pthread_mutex_unlock(&mon_lock);
 }
 
 static double llc_occupancy(const char *mon_data) {
