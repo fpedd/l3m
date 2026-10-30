@@ -248,8 +248,9 @@ def test_c_api_contracts(exports):
     lib, h, cb = m._lib, m._m, l3m._CB(lambda t, u: 1)
     assert lib.l3m_generate(h, (C.c_int32 * 1)(m.vocab), 1, 2, 0.0, 0, cb, None) == -1
     assert lib.l3m_generate(h, (C.c_int32 * 16)(*[1] * 16), 16, 2, 0.0, 0, cb, None) == 0
-    buf = (C.c_int32 * 2)()
-    assert lib.l3m_encode(h, b"hello", 1, buf, 2) == 2 and list(buf) == [m.bos, ord("h")]
+    buf = (C.c_int32 * 3)()
+    assert lib.l3m_encode(h, b"hello", 1, buf, 2) == -1
+    assert lib.l3m_encode(h, b"hi", 1, buf, 3) == 3 and list(buf) == [m.bos, ord("h"), ord("i")]
     n = C.c_int(7)
     lib.l3m_decode(h, 99999, C.byref(n))
     assert n.value == 0

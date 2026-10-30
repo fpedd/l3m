@@ -155,14 +155,14 @@ static const uint8_t *piece_end(const l3m_tokenizer *t, const uint8_t *p) {
 
 int l3m_tokenizer_encode(const l3m_tokenizer *t, const char *text, int add_bos, int32_t *out, int max) {
     int n = 0;
-    if (add_bos && t->bos >= 0 && n < max) out[n++] = t->bos;
+    if (add_bos && t->bos >= 0) { if (n == max) return -1; out[n++] = t->bos; }
     int lo = n, space = lookup(t, (const uint8_t *)" ", 1);
-    if (t->sp_prefix && *text && space >= 0 && n < max) out[n++] = space;
+    if (t->sp_prefix && *text && space >= 0) { if (n == max) return -1; out[n++] = space; }
     for (const uint8_t *p = (const uint8_t *)text; *p; lo = n) {
         for (const uint8_t *end = piece_end(t, p); p < end; ) {
             int len = t->sp_prefix ? utf8_len(p) : 1, id = lookup(t, p, len);
-            if (id >= 0) { if (n == max) return max; out[n++] = id; }
-            else for (int i = 0; i < len; i++) if ((id = lookup(t, p + i, 1)) >= 0) { if (n == max) return max; out[n++] = id; }
+            if (id >= 0) { if (n == max) return -1; out[n++] = id; }
+            else for (int i = 0; i < len; i++) if ((id = lookup(t, p + i, 1)) >= 0) { if (n == max) return -1; out[n++] = id; }
             p += len;
         }
         n = merge(t, out, lo, n);

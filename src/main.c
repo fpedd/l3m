@@ -136,7 +136,7 @@ static void perf_line(l3m_model *m, FILE *out) {
 static int encode(l3m_model *m, const char *text, int32_t *ids, int max) {
     int n = l3m_encode(m, text ? text : "", 1, ids, max), fit = l3m_ctx(m) < max ? l3m_ctx(m) : max;
     if (n >= 1 && n < fit) return n;
-    if (n == max) fprintf(stderr, "l3m: the prompt is over %d tokens\n", max - 1);
+    if (n < 0) fprintf(stderr, "l3m: the prompt is over %d tokens\n", max);
     else fprintf(stderr, "l3m: the prompt is %d tokens, the limit is %d (--ctx %d)\n", n, fit - 1, l3m_ctx(m));
     return -1;
 }
