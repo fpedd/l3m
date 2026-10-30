@@ -14,6 +14,6 @@ typedef struct {
 
 int  l3m_tokenizer_init(l3m_tokenizer *t, const void *section, size_t size, unsigned flags);   // points into the mmap; -1 if malformed
 void l3m_tokenizer_free(l3m_tokenizer *t);
-int  l3m_tokenizer_encode(const l3m_tokenizer *t, const char *text, int add_bos, int32_t *out, int max);  // count, -1 if over max
+int  l3m_tokenizer_encode(const l3m_tokenizer *t, const char *text, int add_bos, int32_t *out, int max);  // count, -1 if the unmerged ids are over max
 // Not NUL-terminated; a SentencePiece prefix space is kept.
 const uint8_t *l3m_tokenizer_decode(const l3m_tokenizer *t, int32_t tok, int *len);

@@ -44,7 +44,7 @@ L3M_API int          l3m_vocab(const l3m_model *m);
 L3M_API int          l3m_ctx(const l3m_model *m);
 L3M_API const char  *l3m_describe(const l3m_model *m);  // "<file>: <dtype>, <n> layers, <size> MiB on <n> cores (<isa>)"
 
-// l3m_encode returns the token count, or -1 when the ids do not fit in max.
+// l3m_encode returns the token count, or -1 when the ids before merging do not fit in max; strlen(text) + 2 always fits.
 L3M_API int          l3m_encode(const l3m_model *m, const char *text, int add_bos, int32_t *out, int max);
 L3M_API const char  *l3m_decode(const l3m_model *m, int32_t tok, int *len);   // raw bytes, not NUL-terminated
 L3M_API int          l3m_bos(const l3m_model *m);   // -1 if the model has none
