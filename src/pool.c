@@ -1,10 +1,13 @@
 // Pinned SPMD pool and the flag exchange. Rank 0 is the caller; ranks 1..n-1 are persistent threads.
-// Between jobs workers spin for about a millisecond, then poll with a short sleep; inside a job nothing sleeps.
+// Between jobs workers spin for about a millisecond, then sleep on a futex; inside a job nothing sleeps.
+#include <limits.h>
+#include <linux/futex.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdlib.h>
-#include <time.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <x86intrin.h>
 #include "pool.h"
 #include "hw.h"
@@ -28,6 +31,8 @@ struct l3m_pool {
     void      *arg;
 };
 
+static void wake(l3m_pool *p) { syscall(SYS_futex, &p->job_gen, FUTEX_WAKE_PRIVATE, INT_MAX, NULL, NULL, 0); }
+
 static void run_job(l3m_pool *p, int rank, unsigned gen) {
     p->job(p, rank, p->arg);
     atomic_store_explicit(&p->done[rank].v, gen, memory_order_release);
@@ -42,7 +47,7 @@ static void *worker(void *v) {
         double t0 = l3m_now_ns();
         while (atomic_load_explicit(&p->job_gen, memory_order_acquire) == seen) {
             if (l3m_now_ns() - t0 < 1e6) _mm_pause();
-            else nanosleep(&(struct timespec){0, 50000}, NULL);
+            else syscall(SYS_futex, &p->job_gen, FUTEX_WAIT_PRIVATE, seen, NULL, NULL, 0);
         }
         seen = atomic_load_explicit(&p->job_gen, memory_order_acquire);
         if (!p->job) return NULL;                       // stop request
@@ -85,6 +90,7 @@ void l3m_pool_run(l3m_pool *p, l3m_job job, void *arg) {
     p->job = job; p->arg = arg;
     unsigned gen = atomic_load_explicit(&p->job_gen, memory_order_relaxed) + 1;
     atomic_store_explicit(&p->job_gen, gen, memory_order_release);
+    wake(p);
     run_job(p, 0, gen);
     for (int i = 1; i < p->n; i++)
         while (atomic_load_explicit(&p->done[i].v, memory_order_acquire) != gen) _mm_pause();
@@ -94,6 +100,7 @@ void l3m_pool_run(l3m_pool *p, l3m_job job, void *arg) {
 void l3m_pool_stop(l3m_pool *p) {
     p->job = NULL;
     atomic_fetch_add_explicit(&p->job_gen, 1, memory_order_release);
+    wake(p);
     for (int i = 1; i < p->n; i++) pthread_join(p->thread[i], NULL);
     free(p->flag); free(p->done); free(p->release); free(p->wait_ticks); free(p);
 }
