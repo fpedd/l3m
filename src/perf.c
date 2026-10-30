@@ -3,6 +3,8 @@
 #include <errno.h>
 #include <linux/perf_event.h>
 #include <math.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,8 +107,24 @@ static int write_str(const char *path, const char *s) {
     return fclose(f) == 0 && ok ? 0 : -1;
 }
 
+static atomic_int mon_users;   // open counter sets in this process, which share one group
+
+static void mon_group_sweep(void) {   // remove groups of processes that died without closing
+    DIR *d = opendir(RESCTRL "/mon_groups");
+    if (!d) return;
+    char dir[512];
+    int pid;
+    for (struct dirent *e; (e = readdir(d));)
+        if (sscanf(e->d_name, "l3m.%d", &pid) == 1 && kill(pid, 0) && errno == ESRCH) {
+            snprintf(dir, sizeof dir, RESCTRL "/mon_groups/%s", e->d_name);
+            rmdir(dir);
+        }
+    closedir(d);
+}
+
 static void mon_group_join(char *group, size_t n) {   // group: the mon_data directory to read, root if unprivileged
     snprintf(group, n, RESCTRL "/mon_data");
+    if (atomic_fetch_add(&mon_users, 1) == 0) mon_group_sweep();
     char dir[256], path[512], tid[300];
     snprintf(dir, sizeof dir, RESCTRL "/mon_groups/l3m.%d", getpid());
     if (mkdir(dir, 0755) && errno != EEXIST) return;
@@ -116,13 +134,14 @@ static void mon_group_join(char *group, size_t n) {   // group: the mon_data dir
     for (struct dirent *e; (e = readdir(tasks));) {
         if (e->d_name[0] == '.') continue;
         snprintf(tid, sizeof tid, "%s\n", e->d_name);
-        if (write_str(path, tid)) { closedir(tasks); rmdir(dir); return; }
+        if (write_str(path, tid)) { closedir(tasks); return; }
     }
     closedir(tasks);
     snprintf(group, n, "%s/mon_data", dir);
 }
 
 static void mon_group_leave(void) {
+    if (atomic_fetch_sub(&mon_users, 1) != 1) return;
     char dir[256];
     snprintf(dir, sizeof dir, RESCTRL "/mon_groups/l3m.%d", getpid());
     rmdir(dir);
@@ -168,7 +187,7 @@ l3m_hwcounters *l3m_hwcounters_open(int v) {
     if (f) fclose(f);
     mon_group_join(c->mon_data, sizeof c->mon_data);
     int any = c->n_l3 || c->n_umc || c->rapl_fd >= 0 || !isnan(llc_occupancy(c->mon_data));
-    if (!any) { free(c); return NULL; }
+    if (!any) { mon_group_leave(); free(c); return NULL; }
     c->t0 = l3m_now_ns();
     c->l3_last = read_sum(c->l3_fd, c->n_l3);
     c->umc_last = read_sum(c->umc_fd, c->n_umc);
