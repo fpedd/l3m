@@ -8,10 +8,12 @@
 #include <unistd.h>
 #include "hw.h"
 
-// Read a small sysfs file into buf; 0 on success.
+// Read a small sysfs file into buf, under $L3M_SYSFS if set (for tests); 0 on success.
 static int read_str(char *buf, size_t n, const char *fmt, int cpu, int idx) {
-    char path[256];
-    snprintf(path, sizeof path, fmt, cpu, idx);
+    char path[512], rel[256];
+    const char *root = getenv("L3M_SYSFS");
+    snprintf(rel, sizeof rel, fmt, cpu, idx);
+    snprintf(path, sizeof path, "%s%s", root ? root : "", rel);
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     if (!fgets(buf, (int)n, f)) buf[0] = 0;

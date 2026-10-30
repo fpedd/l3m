@@ -127,6 +127,34 @@ def test_smt_siblings(exports):
     assert a.describe() == b.describe()
 
 
+def fake_sysfs(root, l2):
+    """One 4 MiB L3 over cpus with {cpu: (L2 KiB, cpus sharing that L2)}."""
+    for c, (kib, shared) in l2.items():
+        d = root / f"sys/devices/system/cpu/cpu{c}"
+        (d / "topology").mkdir(parents=True)
+        (d / "topology/thread_siblings_list").write_text(f"{c}\n")
+        for i, (level, size, cpus) in enumerate([(2, f"{kib}K", shared), (3, "4096K", list(l2))]):
+            for name, v in [("level", level), ("type", "Unified"), ("size", size), ("id", 0),
+                            ("shared_cpu_list", ",".join(map(str, cpus)))]:
+                (d / f"cache/index{i}").mkdir(parents=True, exist_ok=True)
+                (d / f"cache/index{i}/{name}").write_text(f"{v}\n")
+
+
+def test_hybrid_budgets(exports, tmp_path, monkeypatch, capfd):
+    """Two 2 MiB L2 cores and a pair sharing 1 MiB: vocab tiles go to the cores with room."""
+    if len(CPUS) < 4:
+        pytest.skip("needs 4 cpus")
+    big, small = cores(4)[:2], cores(4)[2:]
+    fake_sysfs(tmp_path, {c: (2048, [c]) for c in big} | {c: (1024, small) for c in small})
+    monkeypatch.setenv("L3M_SYSFS", str(tmp_path))
+    capfd.readouterr()
+    l3m.Model(exports[("tiny_llama", "f32")], cpus=big + small, verbose=True)
+    ranks = re.findall(r"vocab tiles \[(\d+), (\d+)\).*budget [\d.]+ of ([\d.]+) nominal", capfd.readouterr().err)
+    tiles = [int(hi) - int(lo) for lo, hi, _ in ranks]
+    assert [float(n) for *_, n in ranks] == [3.0, 3.0, 1.5, 1.5]
+    assert min(tiles[:2]) > max(tiles[2:])
+
+
 @pytest.mark.parametrize("isa", ISAS)
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("spec", SPECS)
