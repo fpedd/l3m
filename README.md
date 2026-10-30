@@ -74,10 +74,7 @@ output-sharded, cache-resident GEMV, on one consumer CPU, in the open. It differ
 attention stays on the cores that own the heads, weights use ggml blocks rather than INT8, and
 each all-gather waits on a full barrier rather than per-head ready signals.
 
-The same idea drives some inference accelerators, which skip off-chip memory and keep the
-weights in on-chip SRAM. The best-known example is Groq, whose technology NVIDIA licensed in
-late 2025. For a deep dive into its architecture, see
-[Inside Groq LPU Architecture](https://github.com/zartbot/blog/issues/4).
+SRAM-based accelerators such as Groq's LPU apply the same idea in hardware.
 
 ## Tests
 
