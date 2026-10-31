@@ -1,0 +1,6 @@
+"""TinyStories-28M: Eldan and Li's 8-layer TinyStories GPT-Neo."""
+source = "hf_gpt_neo"
+repo = "roneneldan/TinyStories-28M"
+weights = "pytorch_model.bin"
+dtype = "q8_0"
+head_dtype = "q8_0"

@@ -1,0 +1,6 @@
+"""TinyStories-3M: Eldan and Li's 8-layer TinyStories GPT-Neo."""
+source = "hf_gpt_neo"
+repo = "roneneldan/TinyStories-3M"
+weights = "pytorch_model.bin"
+dtype = "bf16"
+head_dtype = "bf16"
