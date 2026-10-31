@@ -98,10 +98,13 @@ def write(m, dtype, head_dtype, out):
         tok_offset = f.tell()
         f.write(struct.pack("<IiiI", len(m.tokens), m.bos, m.eos, max_len))
         f.write(b"".join(struct.pack("<fH", s, len(b)) + b for b, s in m.tokens))
+        chat_offset = f.tell() if m.chat else 0
+        if m.chat:
+            f.write(struct.pack("<i", m.chat[0]) + m.chat[1].encode() + b"\0")
         f.seek(0)
-        f.write(struct.pack("<4sI16sIIIIIIIIffIIQQ", b"l3m\0", 1, m.arch.encode(), m.flags, m.dim, m.n_layers,
+        f.write(struct.pack("<4sI16sIIIIIIIIffIIQQQ", b"l3m\0", 1, m.arch.encode(), m.flags, m.dim, m.n_layers,
                             m.n_heads, m.n_kv_heads, m.ffn_dim, m.vocab, m.ctx, m.rope_theta, m.norm_eps,
-                            len(names), 0, toc_offset, tok_offset))
+                            len(names), 0, toc_offset, tok_offset, chat_offset))
     return {n: len(blobs[n]) for n in names}
 
 

@@ -1,4 +1,4 @@
-// A mapped .l3m file: header, table of contents, tokenizer.
+// A mapped .l3m file: header, table of contents, tokenizer, chat template.
 #pragma once
 #include <stddef.h>
 #include "model.h"
@@ -10,6 +10,8 @@ typedef struct {
     const l3m_header *h;
     const l3m_tensor *toc;
     l3m_tokenizer     tok;
+    int               im_start;   // ChatML, if system is not NULL
+    const char       *system;
 } l3m_file;
 
 int               l3m_file_open(l3m_file *f, const char *path);           // 0 on success, message on stderr otherwise

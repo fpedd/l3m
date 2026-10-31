@@ -49,6 +49,8 @@ L3M_API int          l3m_encode(const l3m_model *m, const char *text, int add_bo
 L3M_API const char  *l3m_decode(const l3m_model *m, int32_t tok, int *len);   // raw bytes, not NUL-terminated
 L3M_API int          l3m_bos(const l3m_model *m);   // -1 if the model has none
 L3M_API int          l3m_eos(const l3m_model *m);
+// A ChatML template: the default system prompt ("" for none), the <|im_start|> id, and the EOS is <|im_end|>. NULL if none.
+L3M_API const char  *l3m_chatml(const l3m_model *m, int32_t *im_start);
 
 L3M_API int          l3m_perf_read(l3m_model *m, l3m_perf *out);   // since the previous read; -1 if nothing ran
 

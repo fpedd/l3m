@@ -25,7 +25,7 @@ def patched(src, dst, edits):
     return dst
 
 
-CASES = {   # header: n_heads at 36, vocab 48, n_tensors 64, toc 72
+CASES = {   # header: n_heads at 36, vocab 48, n_tensors 64, toc 72, chat 88
     "n_tensors": ([("<I", 64, 0xFFFFFFFF)], "truncated file"),
     "toc_offset": ([("<Q", 72, 1 << 63)], "truncated file"),
     "heads": ([("<I", 36, 3)], "bad config"),
@@ -39,6 +39,7 @@ CASES = {   # header: n_heads at 36, vocab 48, n_tensors 64, toc 72
     "tok_len": ([("<H", ("tok", 20), 65535)], "bad tokenizer"),
     "tok_bos": ([("<i", ("tok", 4), 99999)], "bad tokenizer"),
     "tok_vocab": ([("<I", 48, 100)], "tensor embed: expected"),
+    "chat_offset": ([("<Q", 88, 1 << 40)], "bad chat section"),
 }
 
 

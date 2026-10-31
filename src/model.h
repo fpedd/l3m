@@ -1,6 +1,6 @@
 // l3m on-disk format and model configuration.
 //
-// A .l3m file is: [header 1024 B][tensor data, each 64-byte aligned][toc][tokenizer].
+// A .l3m file is: [header 1024 B][tensor data, each 64-byte aligned][toc][tokenizer][chat, optional].
 // Matrices are [rows = outputs][cols = inputs], row-major, quantized in blocks of 32 along the inputs as in ggml.
 #pragma once
 #include <stdint.h>
@@ -34,7 +34,8 @@ typedef struct {
     float    rope_theta, norm_eps;
     uint32_t n_tensors, reserved;         // reserved keeps the u64s 8-byte aligned
     uint64_t toc_offset, tokenizer_offset;
-    uint8_t  pad[1024 - 88];
+    uint64_t chat_offset;                 // 0: no chat template
+    uint8_t  pad[1024 - 96];
 } l3m_header;
 _Static_assert(sizeof(l3m_header) == 1024, "header is 1024 bytes");
 
@@ -49,6 +50,9 @@ typedef struct {
 // Tokenizer: header then n_tokens x { float score; uint16_t len; uint8_t bytes[len]; }.
 // Scores order merges (higher first), as in llama2.c; -rank for byte-level BPE.
 typedef struct { uint32_t n_tokens; int32_t bos, eos; uint32_t max_len; } l3m_tok_header;
+
+// Chat: a ChatML template, ended by the EOS (<|im_end|>). The <|im_start|> id, then the default system prompt, NUL-terminated.
+typedef struct { int32_t im_start; } l3m_chat_header;
 
 // Quantization blocks, bit-for-bit ggml's.
 typedef struct { uint16_t d; int8_t  qs[32]; } l3m_block_q8_0;   // f16 scale, x = q * d

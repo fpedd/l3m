@@ -5,6 +5,7 @@ Matrices are [outputs][inputs]; RoPE uses llama2.c's adjacent pairs, so HF's rot
 import hashlib
 import json
 import pickle
+import re
 import struct
 import urllib.request
 import zipfile
@@ -38,6 +39,7 @@ class Model:
     tokens: list = field(default_factory=list)    # (bytes, score) per id
     bos: int = -1
     eos: int = -1
+    chat: tuple = None                            # ChatML: (<|im_start|> id, default system prompt); eos is <|im_end|>
 
 
 # ---------------------------------------------------------------- llama2.c .bin
@@ -188,6 +190,7 @@ def hf_llama(repo, weights=None):
     m.flags |= tok_flags
     eos = cfg.get("eos_token_id", -1)
     m.bos, m.eos = cfg.get("bos_token_id", -1), eos[0] if isinstance(eos, list) else eos
+    chatml(repo, m)
     return m
 
 
@@ -243,6 +246,19 @@ def hf_gpt_neo(repo, weights=None):
     m.flags |= tok_flags
     m.bos = m.eos = cfg["eos_token_id"]
     return m
+
+
+def chatml(repo, m):
+    """Sets m.chat and m.eos if tokenizer_config.json has a ChatML chat_template."""
+    try:
+        t = json.loads(Path(hf_hub_download(repo, "tokenizer_config.json")).read_text()).get("chat_template")
+    except EntryNotFoundError:
+        return
+    pieces = [b for b, _ in m.tokens]
+    if not isinstance(t, str) or "<|im_start|>" not in t or not {b"<|im_start|>", b"<|im_end|>"} <= set(pieces):
+        return
+    system = re.search(r"<\|im_start\|>system\n([^'{}<]*)<\|im_end\|>", t)
+    m.chat, m.eos = (pieces.index(b"<|im_start|>"), system[1] if system else ""), pieces.index(b"<|im_end|>")
 
 
 # ---------------------------------------------------------------- HF tokenizers: tokenizer.json or tokenizer.model
