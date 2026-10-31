@@ -47,13 +47,13 @@ where l3m reaches 330 to 500 GB/s. Evicting l3m's weights before every token (`-
 cache, more and more of its weights come from DRAM, and the lead shrinks toward what the memory
 bus allows.
 
-| model                              | cores | l3m tok/s | llama.cpp tok/s | speedup | l3m from DRAM | llama.cpp from DRAM |
-| ---------------------------------- | ----: | --------: | --------------: | ------: | ------------: | ------------------: |
-| stories15M bf16                    |     8 |    15,300 |           3,180 |    4.8x |          1.1% |                  8% |
-| stories15M q8_0                    |     8 |    20,300 |           5,200 |    3.9x |          0.5% |                  4% |
-| stories42M q8_0                    |    16 |    10,700 |           3,120 |    3.4x |          1.6% |                 13% |
-| stories110M q4_0, ctx 128          |    16 |     5,800 |           1,340 |    4.3x |          3.3% |                 50% |
-| SmolLM2-135M q8_0, ctx 256, forced |    16 |       530 |             430 |    1.2x |           72% |                 74% |
+| model                              | cores | l3m tok/s | llama.cpp tok/s | speedup | l3m from DRAM |
+| ---------------------------------- | ----: | --------: | --------------: | ------: | ------------: |
+| stories15M bf16                    |     8 |    15,300 |           3,180 |    4.8x |          1.1% |
+| stories15M q8_0                    |     8 |    20,300 |           5,200 |    3.9x |          0.5% |
+| stories42M q8_0                    |    16 |    10,700 |           3,120 |    3.4x |          1.6% |
+| stories110M q4_0, ctx 128          |    16 |     5,800 |           1,340 |    4.3x |          3.3% |
+| SmolLM2-135M q8_0, ctx 256, forced |    16 |       530 |             430 |    1.2x |           72% |
 
 Measured on a Ryzen 9 7950X (16 cores, 2 x 32 MiB L3, DDR5-5600): 256 greedy tokens,
 median of 7 runs, `sudo ./l3m bench <file> --cores 0-7 -n 256` (or `0-15`). Every model is
