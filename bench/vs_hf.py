@@ -4,7 +4,7 @@
     uv run bench/vs_hf.py [stories15M] [--dtype bf16 | --file model.l3m] [--prompt ...] [--new 32]
 
 Passes if the export matches transformers (mean KL < 1e-8) and both paths are within 1e-3 nats of
-the reference, or for quantized weights the fast path is within 10% (+1e-3) of the reference path's KL.
+the reference, or for quantized weights the fast path is within 0.03 nats of the reference path.
 """
 import argparse
 import re
@@ -150,8 +150,8 @@ def main(argv=None):
     print(f"  greedy agree {(ref[len(ids) - 1:-1].argmax(-1) == np.array(gen)).mean():5.1%}")
     lr, lf = l3m_logits(slow, seq), l3m_logits(fast, seq)
     kl_ref, kl_fast = compare("reference", ref, lr), compare("fast", ref, lf)
-    compare("fast/ref", lr, lf)
-    ok &= bool(max(kl_ref, kl_fast) < 1e-3 if dtype == "f32" else kl_fast <= 1.1 * kl_ref + 1e-3)
+    kl_both = compare("fast/ref", lr, lf)
+    ok &= bool(max(kl_ref, kl_fast) < 1e-3 if dtype == "f32" else kl_both < 0.03)
     print("PASS" if ok else "FAIL")
     return ok
 
