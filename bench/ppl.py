@@ -15,8 +15,6 @@ import numpy as np
 import l3m
 from l3m import export
 
-ROOT = Path(__file__).resolve().parents[1]
-
 
 def log_softmax(z):
     z = z - z.max(-1, keepdims=True)
