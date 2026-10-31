@@ -4,22 +4,22 @@ import sys
 import pytest
 from huggingface_hub import hf_hub_download
 
-from l3m import archs
+from l3m import archs, export
 from tests.conftest import ROOT, with_tokens
 
 pytestmark = pytest.mark.network
 
 
-@pytest.mark.parametrize("model", [
+@pytest.mark.parametrize("model,dtype", [(m, "f32") for m in (
     "stories15M",               # llama2.c .bin, tied, against numpy
     "SmolLM2-135M",             # HF Llama, tied, grouped-query attention
     "distilgpt2",               # HF GPT-2: Conv1D transposes, fused qkv
     "TinyStories-33M",          # GPT-Neo: pytorch_model.bin, the attention scale folded into wq
-])
-def test_matches_independent_reference(cli, tmp_path, model):
-    if model != "stories15M":
+)] + [(p.stem, export.load_spec(p.stem).dtype) for p in sorted((ROOT / "models").glob("*.py"))])
+def test_matches_independent_reference(cli, tmp_path, model, dtype):
+    if export.load_spec(model).source != "llama2c":
         pytest.importorskip("transformers")
-    cmd = [sys.executable, str(ROOT / "bench" / "vs_hf.py"), model, "--dtype", "f32", "--file", str(tmp_path / "m.l3m")]
+    cmd = [sys.executable, str(ROOT / "bench" / "vs_hf.py"), model, "--dtype", dtype, "--file", str(tmp_path / "m.l3m")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 
