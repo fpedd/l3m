@@ -1,0 +1,6 @@
+"""llama-68m: JackFram's 2-layer Llama with an untied head, a SpecInfer draft model."""
+source = "hf_llama"
+repo = "JackFram/llama-68m"
+weights = "pytorch_model.bin"
+dtype = "q8_0"
+head_dtype = "q8_0"
