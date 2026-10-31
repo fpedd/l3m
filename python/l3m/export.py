@@ -69,18 +69,21 @@ def encode(x, dtype):
 
 # ---------------------------------------------------------------- writer
 
-def tensor_dtype(name, m, dtype, head_dtype):
-    """Matrices take the body dtype, the lm_head (the embed when tied) its own, vectors and gathers f32."""
+def tensor_dtype(name, m, dtype, head_dtype, finer=()):
+    """Matrices take the body dtype, the lm_head (the embed when tied) and names containing one of finer the head's,
+    vectors and gathers f32."""
     if m.tensors[name].ndim == 1 or name == "pos_embed":
         return "f32"
     if name == "lm_head" or (name == "embed" and m.flags & archs.TIED):
         return head_dtype
-    return "f32" if name == "embed" else dtype
+    if name == "embed":
+        return "f32"
+    return head_dtype if any(s in name for s in finer) else dtype
 
 
-def write(m, dtype, head_dtype, out):
+def write(m, dtype, head_dtype, out, finer=()):
     names = sorted(m.tensors)
-    dt = {n: tensor_dtype(n, m, dtype, head_dtype) for n in names}
+    dt = {n: tensor_dtype(n, m, dtype, head_dtype, finer) for n in names}
     blobs = {n: encode(m.tensors[n], dt[n]) for n in names}
     max_len = max(len(b) for b, _ in m.tokens)
     with open(out, "wb") as f:
@@ -137,12 +140,13 @@ def load_model(spec):
 def export(name, dtype=None, head_dtype=None, out=None):
     spec = load_spec(name)
     dtype = dtype or spec.dtype
+    finer = getattr(spec, "finer", ()) if dtype == spec.dtype else ()
     head_dtype = head_dtype or (spec.head_dtype if dtype == spec.dtype else HEAD_DTYPE[dtype])
     out = Path(out or f"{Path(name).stem}.l3m")
     if not out.parent.is_dir():
         raise SystemExit(f"no directory {out.parent} for {out}")
     m = load_model(spec)
-    summary(m, write(m, dtype, head_dtype, out), out)
+    summary(m, write(m, dtype, head_dtype, out, finer), out)
     return out
 
 

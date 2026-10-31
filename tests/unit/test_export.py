@@ -90,6 +90,8 @@ def test_tensor_dtype_rules():
     assert export.tensor_dtype("embed", m, "q4_0", "q8_0") == "f32"
     assert export.tensor_dtype("lm_head", m, "q4_0", "q8_0") == "q8_0"
     assert export.tensor_dtype("blk.0.wq", m, "q4_0", "q8_0") == "q4_0"
+    assert export.tensor_dtype("blk.0.wq", m, "q4_0", "q8_0", ("blk.0.",)) == "q8_0"
+    assert export.tensor_dtype("norm", m, "q4_0", "q8_0", ("norm",)) == "f32"
     m.flags = export.archs.TIED
     assert export.tensor_dtype("embed", m, "q4_0", "q8_0") == "q8_0"
 
