@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import l3m
-from l3m import archs, export
+from l3m import archs, export, quant
 from tests.conftest import CPUS, DTYPES, MODELS, ROOT, SPECS, cores, tiny_spec
 
 PROMPT = "Once upon a time"
@@ -212,7 +212,7 @@ def test_matches_numpy_reference(exports, spec):
     fast, ref = l3m.Model(path, force=True), l3m.Model(path, reference=True)
     ids = ref.encode(PROMPT)
     seq = ids + fast.generate(ids, 24, temperature=0)
-    want = vs_hf.numpy_forward(export.load_model(tiny_spec(spec)), seq, bf16_kv=True)
+    want = quant.forward(export.load_model(tiny_spec(spec)), seq, bf16_kv=True)
     for m in (ref, fast):
         assert np.abs(vs_hf.l3m_logits(m, seq) - want).max() < 1e-4 * np.abs(want).max()
 

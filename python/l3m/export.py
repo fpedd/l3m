@@ -40,10 +40,9 @@ def q8_0(x):
     return np.concatenate([d.astype(np.float16).view(np.uint8).reshape(-1, 2), q.view(np.uint8)], axis=1)
 
 
-def q4_0(x):
+def q4_0(x, d=None):   # d: the scales of an x already on their grid
     b = x.astype(np.float32).reshape(-1, 32)
-    imax = np.abs(b).argmax(axis=1)
-    d = b[np.arange(len(b)), imax] / np.float32(-8)
+    d = b[np.arange(len(b)), np.abs(b).argmax(axis=1)] / np.float32(-8) if d is None else d.reshape(-1)
     q = np.clip(np.floor(b * inverse(d)[:, None] + np.float32(8.5)), 0, 15).astype(np.uint8)
     return np.concatenate([d.astype(np.float16).view(np.uint8).reshape(-1, 2), q[:, :16] | (q[:, 16:] << 4)], axis=1)
 
@@ -57,14 +56,14 @@ def mxfp4(x):
     return np.concatenate([e[:, None], q[:, :16] | (q[:, 16:] << 4)], axis=1)
 
 
-def encode(x, dtype):
+def encode(x, dtype, d=None):
     if dtype == "f32":
         return x.astype(np.float32).tobytes()
     if dtype == "bf16":
         return to_bf16(x).tobytes()
     if x.shape[-1] % 32:
         raise ValueError(f"{dtype}: inputs {x.shape[-1]} not a multiple of 32")
-    return {"q8_0": q8_0, "q4_0": q4_0, "mxfp4": mxfp4}[dtype](x).tobytes()
+    return (q4_0(x, d) if dtype == "q4_0" else {"q8_0": q8_0, "mxfp4": mxfp4}[dtype](x)).tobytes()
 
 
 # ---------------------------------------------------------------- writer
@@ -78,10 +77,10 @@ def tensor_dtype(name, m, dtype, head_dtype):
     return "f32" if name == "embed" else dtype
 
 
-def write(m, dtype, head_dtype, out):
+def write(m, dtype, head_dtype, out, d=None):
     names = sorted(m.tensors)
     dt = {n: tensor_dtype(n, m, dtype, head_dtype) for n in names}
-    blobs = {n: encode(m.tensors[n], dt[n]) for n in names}
+    blobs = {n: encode(m.tensors[n], dt[n], (d or {}).get(n)) for n in names}
     max_len = max(len(b) for b, _ in m.tokens)
     with open(out, "wb") as f:
         f.write(b"\0" * 1024)
@@ -145,7 +144,11 @@ def export(name, dtype=None, head_dtype=None, out=None):
     if not out.parent.is_dir():
         raise SystemExit(f"no directory {out.parent} for {out}")
     m = load_model(spec)
-    summary(m, write(m, dtype, head_dtype, out), out)
+    d = None
+    if "q4_0" in (dtype, head_dtype):
+        from . import quant  # it imports this module
+        d = quant.calibrate(m, quant.sample(m, out), dtype, head_dtype)
+    summary(m, write(m, dtype, head_dtype, out, d), out)
     return out
 
 
