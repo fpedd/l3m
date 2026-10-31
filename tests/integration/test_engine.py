@@ -280,7 +280,7 @@ def test_stops_at_eos(exports, tmp_path):
 
 
 def test_callback_stops_and_perf_counts(exports):
-    m = l3m.Model(exports[("tiny_llama", "q4_0")], force=True)
+    m = l3m.Model(exports[("tiny_llama", "q8_0")], force=True)
     seen = []
     ids = m.encode(PROMPT)
     out = m.generate(ids, 50, temperature=0, on_token=lambda t: seen.append(t) or len(seen) < 5)
