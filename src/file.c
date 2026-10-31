@@ -124,6 +124,16 @@ int l3m_file_open(l3m_file *f, const char *path) {
     if (l3m_tokenizer_init(&f->tok, (const char *)f->map + h->tokenizer_offset, f->size - h->tokenizer_offset, h->flags))
         return bad(f, path, "bad tokenizer section");
     if (f->tok.n > (int)h->vocab) return bad(f, path, "tokenizer has %d tokens, vocab only %u", f->tok.n, h->vocab);
+    if (h->chat_offset) {
+        l3m_chat_header c;
+        const char *sys = (const char *)f->map + h->chat_offset + sizeof c;
+        if (h->chat_offset > f->size - sizeof c || !memchr(sys, 0, f->size - h->chat_offset - sizeof c))
+            return bad(f, path, "bad chat section");
+        memcpy(&c, (const char *)f->map + h->chat_offset, sizeof c);   // unaligned
+        if (c.im_start < 0 || c.im_start >= f->tok.n || f->tok.eos < 0 || f->tok.eos >= f->tok.n)
+            return bad(f, path, "bad chat section");
+        f->im_start = c.im_start; f->system = sys;
+    }
     return 0;
 }
 

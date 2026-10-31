@@ -573,6 +573,7 @@ int l3m_ctx(const l3m_model *m) { return m->ctx; }
 const char *l3m_describe(const l3m_model *m) { return m->desc; }
 int l3m_bos(const l3m_model *m) { return m->f.tok.bos; }
 int l3m_eos(const l3m_model *m) { return m->f.tok.eos; }
+const char *l3m_chatml(const l3m_model *m, int32_t *im_start) { *im_start = m->f.im_start; return m->f.system; }
 
 int l3m_encode(const l3m_model *m, const char *text, int add_bos, int32_t *out, int max) {
     return l3m_tokenizer_encode(&m->f.tok, text, add_bos, out, max);

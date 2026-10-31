@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import l3m
-from l3m import export
+from l3m import archs, export
 from tests.conftest import CPUS, DTYPES, MODELS, ROOT, SPECS, cores, tiny_spec
 
 PROMPT = "Once upon a time"
@@ -71,6 +71,26 @@ def test_cli_chat_and_bench(cli, exports):
     rows = run(cli, "bench", path, exports[("tiny_gpt2", "q8_0")], "--force", "-n", 8).splitlines()
     assert len(rows) == 4 and rows[2].startswith("| tiny_llama-q8_0.l3m")
     assert len(run(cli, "bench", path, "--force", "--md", "-n", 4).splitlines()) == 3
+
+
+def test_cli_chatml(cli, tmp_path):
+    m = export.load_model(tiny_spec())
+    m.tokens[258:260] = [(b"<|im_start|>", archs.NO_MERGE), (b"<|im_end|>", archs.NO_MERGE)]
+    m.chat, m.eos = (258, "s"), 259
+    export.write(m, "f32", "f32", tmp_path / "chat.l3m")
+    py = l3m.Model(tmp_path / "chat.l3m", force=True)
+
+    def turn(role, text):
+        return [258] + py.encode(f"{role}\n{text}", bos=False) + [259] + py.encode("\n", bos=False)
+
+    ids, want = turn("system", "s"), b"\n> "
+    for line in "ab":
+        ids += turn("user", line) + [258] + py.encode("assistant\n", bos=False)
+        reply = py.generate(ids, 4, temperature=0)
+        ids, want = ids + reply + [259] + py.encode("\n", bos=False), want + py.decode_bytes(reply) + b"\n> "
+    out = subprocess.run([str(cli), "chat", str(tmp_path / "chat.l3m"), "--force", "-n", "4", "-t", "0"], input=b"a\nb\n",
+                         capture_output=True, check=True).stdout
+    assert out == want
 
 
 def test_cli_bench_table_survives_a_bad_file(cli, exports):

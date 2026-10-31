@@ -156,9 +156,50 @@ static int cmd_generate(const args *a) {
     return 0;
 }
 
-// The whole conversation is re-fed each turn as plain text, no chat template.
+// ChatML ids appended to ids[0, n): the new count, -1 if over max.
+static int im_open(l3m_model *m, int32_t im_start, const char *role, const char *text, int32_t *ids, int n, int max) {
+    char s[4200];   // "<|im_start|>role\ntext"
+    snprintf(s, sizeof s, "%s\n%s", role, text);
+    int k = n >= 0 && n + 1 < max ? l3m_encode(m, s, 0, ids + n + 1, max - n - 1) : -1;
+    if (k < 0) return -1;
+    ids[n] = im_start;
+    return n + 1 + k;
+}
+static int im_close(l3m_model *m, int32_t *ids, int n, int max) {   // "<|im_end|>\n"
+    int k = n >= 0 && n < max ? l3m_encode(m, "\n", 0, ids + n + 1, max - n - 1) : -1;
+    if (k < 0) return -1;
+    ids[n] = l3m_eos(m);
+    return n + 1 + k;
+}
+
+// ChatML: the conversation's ids are kept and re-fed each turn, a reply ends at <|im_end|>; -p replaces the system prompt.
+static int cmd_chatml(l3m_model *m, const args *a, const char *system, int32_t im_start) {
+    char line[4096];
+    int32_t ids[4096];
+    int n = 0, max = l3m_ctx(m) < 4096 ? l3m_ctx(m) : 4096;
+    if (a->prompt) system = a->prompt;
+    if (*system) n = im_close(m, ids, im_open(m, im_start, "system", system, ids, 0, max), max);
+    for (int turn = 0; n >= 0; turn++) {
+        fputs("\n> ", stdout); fflush(stdout);
+        if (!fgets(line, sizeof line, stdin)) return 0;
+        line[strcspn(line, "\n")] = 0;
+        n = im_close(m, ids, im_open(m, im_start, "user", line, ids, n, max), max);
+        if ((n = im_open(m, im_start, "assistant", "", ids, n, max - 2)) < 0) break;   // 2: room for the reply's "<|im_end|>\n"
+        sink s = { m, ids + n, 0 };
+        l3m_generate(m, ids, n, a->max_new < max - 2 - n ? a->max_new : max - 2 - n, a->temperature, a->seed + (uint64_t)turn, collect_token, &s);
+        for (int i = 0; i < s.n; i++) print_token(ids[n + i], &s);
+        n = im_close(m, ids, n + s.n, max);
+    }
+    fprintf(stderr, "l3m: the conversation fills the context, ending\n");
+    return 0;
+}
+
+// Without a chat template the whole conversation is re-fed each turn as plain text.
 static int cmd_chat(const args *a) {
     l3m_model *m = load(a, a->ref);
+    int32_t im_start;
+    const char *system = l3m_chatml(m, &im_start);
+    if (system) { int r = cmd_chatml(m, a, system, im_start); l3m_free(m); return r; }
     char history[1 << 16] = "", line[4096];
     int turn = 0;
     int32_t ids[4096];
