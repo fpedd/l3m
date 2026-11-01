@@ -1,14 +1,11 @@
-"""ctypes wrapper over libl3m.so (src/l3m.h).
-
-    import l3m
-    m = l3m.Model("stories15M.l3m")
-    print("Once upon a time" + m.decode(m.generate(m.encode("Once upon a time"), 200)))
-"""
+"""ctypes wrapper over libl3m.so (src/l3m.h)."""
 import ctypes as C
 import functools
 import os
 import threading
 from pathlib import Path
+
+import numpy as np
 
 _CB = C.CFUNCTYPE(C.c_int, C.c_int32, C.c_void_p)
 
@@ -148,7 +145,6 @@ class Model:
     @property
     def logits(self):
         """The last position's logits."""
-        import numpy as np
         with self._lock:
             return np.ctypeslib.as_array(self._lib.l3m_logits(self._handle()), shape=(self.vocab,)).copy()
 

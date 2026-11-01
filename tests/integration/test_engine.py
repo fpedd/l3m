@@ -9,7 +9,7 @@ import pytest
 
 import l3m
 from l3m import archs, export, quant
-from tests.conftest import CPUS, DTYPES, MODELS, ROOT, SPECS, cores, tiny_spec
+from tests.conftest import CPUS, DTYPES, MODELS, ROOT, SPECS, call, cores, tiny_spec
 
 PROMPT = "Once upon a time"
 ISAS = ["scalar", "avx2", "avx512"]
@@ -17,11 +17,10 @@ ISAS = ["scalar", "avx2", "avx512"]
 _spec = importlib.util.spec_from_file_location("vs_hf", ROOT / "bench" / "vs_hf.py")
 vs_hf = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(vs_hf)
-log_softmax = vs_hf.log_softmax
 
 
 def run(cli, *args, code=0, **kw):
-    r = subprocess.run([str(cli), *map(str, args)], capture_output=True, encoding="utf-8", errors="replace", **kw)
+    r = call(cli, *args, **kw)
     assert r.returncode == code, r.stdout + r.stderr
     return r.stdout
 
@@ -34,7 +33,7 @@ def last_logits(m, ids):
 def assert_fast_matches_reference(fast, path):
     ref = l3m.Model(path, reference=True)
     ids = ref.encode(PROMPT)
-    lr, lf = log_softmax(last_logits(ref, ids)), log_softmax(last_logits(fast, ids))
+    lr, lf = vs_hf.log_softmax(last_logits(ref, ids)), vs_hf.log_softmax(last_logits(fast, ids))
     assert np.exp(lr) @ (lr - lf) < 0.01
     assert lr.argmax() == lf.argmax()
 
@@ -60,14 +59,12 @@ def test_cli_chat_and_bench(cli, exports):
     out = run(cli, "chat", path, "--force", "-n", 4, "-s", 1, input="hello\nagain\n")
     assert out.count("> ") == 3
     assert run(cli, "chat", path, "--force", "-n", 4, "-p", "Lily said", input="hi\n").count("> ") == 2
-    r = subprocess.run([str(cli), "chat", str(path), "--force", "--ctx", "8", "-n", "4"], input="x" * 20 + "\n",
-                       capture_output=True, text=True)
+    r = call(cli, "chat", path, "--force", "--ctx", 8, "-n", 4, input="x" * 20 + "\n")
     assert r.returncode == 0 and "fills the context" in r.stderr
     assert "tok/s" in run(cli, "bench", path, "--force", "-n", 8)
     ref = run(cli, "bench", path, "--ref", "-n", 4)
     assert "tok/s" in ref and "GB/s" not in ref and "root" not in ref
-    cold = run(cli, "bench", path, "--force", "--cold", "-v", "-n", 4)
-    assert "tok/s" in cold
+    assert "tok/s" in run(cli, "bench", path, "--force", "--cold", "-v", "-n", 4)
     rows = run(cli, "bench", path, exports[("tiny_gpt2", "q8_0")], "--force", "-n", 8).splitlines()
     assert len(rows) == 4 and rows[2].startswith("| tiny_llama-q8_0.l3m")
     assert len(run(cli, "bench", path, "--force", "--md", "-n", 4).splitlines()) == 3
@@ -107,7 +104,7 @@ def test_cli_help_and_usage_errors(cli, exports):
                       (["generate", path, "--bogus"], "unknown option --bogus"), (["generate", path, path], "only bench"),
                       (["bench", path, "-n", "0"], "-n 1 or more"), (["generate", path, "--cores", "0,"], "bad --cores"),
                       (["generate", path, "--ref", "--cold"], "--ref runs on one thread")]:
-        r = subprocess.run([str(cli), *map(str, args)], capture_output=True, text=True)
+        r = call(cli, *args)
         assert r.returncode == 2 and msg in r.stderr, (args, r.stderr)
     assert "tok/s" in run(cli, "bench", "-n", 2, "--force", path)
 
@@ -115,7 +112,7 @@ def test_cli_help_and_usage_errors(cli, exports):
 def test_load_refuses_over_budget(cli, tmp_path):
     budget = max(map(float, re.findall(r"([\d.]+) budget, cpus", run(cli, "hw"))))
     spec = tiny_spec()
-    spec.dim, spec.ffn, spec.n_layers = 512, 2048, int(budget // 12) + 2   # the FFN alone is 12 MiB per layer
+    spec.dim, spec.ffn_dim, spec.n_layers = 512, 2048, int(budget // 12) + 2   # the FFN alone is 12 MiB per layer
     export.write(export.load_model(spec), "f32", "f32", tmp_path / "big.l3m")
     with pytest.raises(RuntimeError):
         l3m.Model(tmp_path / "big.l3m", cpus=cores(1))
@@ -208,7 +205,7 @@ def test_attention_without_qkv_biases(tmp_path):
 def test_matches_numpy_reference(exports, spec):
     """bench/vs_hf.py, then both paths at every position against its fp64 forward."""
     path = exports[(spec, "f32")]
-    assert vs_hf.main([str(MODELS / f"{spec}.py"), "--file", str(path), "--prompt", PROMPT, "--new", "24"])
+    assert vs_hf.main([str(MODELS / f"{spec}.py"), "--file", str(path), "-p", PROMPT, "-n", "24"])
     fast, ref = l3m.Model(path, force=True), l3m.Model(path, reference=True)
     ids = ref.encode(PROMPT)
     seq = ids + fast.generate(ids, 24, temperature=0)
@@ -255,7 +252,7 @@ def test_sampling_distribution(exports):
     """Chi-square of the first sampled token over 4000 seeds against softmax(logits / T)."""
     m = l3m.Model(exports[("tiny_gpt2", "f32")], cpus=cores(3), force=True)
     ids, temp, n = [m.bos], 0.5, 4000
-    p = np.exp(log_softmax(last_logits(m, ids) / temp))
+    p = np.exp(vs_hf.log_softmax(last_logits(m, ids) / temp))
     counts = np.zeros(m.vocab)
     p[m.eos] += p[m.bos]   # both end generation
     p[m.bos] = 0

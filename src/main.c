@@ -1,4 +1,5 @@
 // The l3m command line: generate, chat, bench, check, info, hw.
+#include <errno.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -10,6 +11,8 @@
 #include "model.h"
 
 #define MiB (1024.0 * 1024.0)
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+enum { MAX_IDS = 4096 };
 
 typedef struct {
     const char *model, *prompt, *cores;
@@ -80,11 +83,11 @@ static args parse(int argc, char **argv) {
 }
 
 static l3m_model *try_load(const args *a, int ref) {
-    static int cpus[256];
+    int cpus[256];
     l3m_opts o = { .reference = ref, .force = a->force, .verbose = a->verbose, .ctx = a->ctx, .cold = a->cold };
     if (a->cores) {
-        o.n_cpus = l3m_parse_cpus(a->cores, cpus, 256);
-        if (o.n_cpus <= 0) { fprintf(stderr, "l3m: bad --cores %s\n", a->cores); exit(2); }
+        o.n_cpus = l3m_parse_cpus(a->cores, cpus, sizeof cpus / sizeof *cpus);
+        if (o.n_cpus <= 0) bad_arg("--cores", a->cores);
         o.cpus = cpus;
     }
     return l3m_load(a->model, &o);
@@ -118,7 +121,6 @@ static void perf_line(l3m_model *m, FILE *out) {
     fprintf(out, "%s\n%.0f tok/s  %.1f us/tok  (compute %.1f, wait %.1f)",
             l3m_describe(m), 1e9 / p.ns_token, us, p.ns_compute / 1e3, p.ns_wait / 1e3);
     if (p.bytes_token == 0) { fprintf(out, "\n"); return; }   // reference
-    fprintf(out, "  %.0f GB/s effective", p.bytes_token / p.ns_token);
     if (!isnan(p.l3_miss)) fprintf(out, "  L3 miss %.0f/tok", p.l3_miss);
     if (!isnan(p.dram_bytes)) fprintf(out, "  DRAM %.2f MB/tok", p.dram_bytes / 1e6);
     if (!isnan(p.energy_j)) fprintf(out, "  %.2f mJ/tok", p.energy_j * 1e3);
@@ -134,7 +136,7 @@ static void perf_line(l3m_model *m, FILE *out) {
 
 // Token count, or -1 with a message if the prompt does not fit ids and the KV cache.
 static int encode(l3m_model *m, const char *text, int32_t *ids, int max) {
-    int n = l3m_encode(m, text ? text : "", 1, ids, max), fit = l3m_ctx(m) < max ? l3m_ctx(m) : max;
+    int n = l3m_encode(m, text ? text : "", 1, ids, max), fit = MIN(l3m_ctx(m), max);
     if (n >= 1 && n < fit) return n;
     if (n < 0) fprintf(stderr, "l3m: the prompt is over %d tokens\n", max);
     else fprintf(stderr, "l3m: the prompt is %d tokens, the limit is %d (--ctx %d)\n", n, fit - 1, l3m_ctx(m));
@@ -143,8 +145,8 @@ static int encode(l3m_model *m, const char *text, int32_t *ids, int max) {
 
 static int cmd_generate(const args *a) {
     l3m_model *m = load(a, a->ref);
-    int32_t ids[4096];
-    int n = encode(m, a->prompt, ids, 4096);
+    int32_t ids[MAX_IDS];
+    int n = encode(m, a->prompt, ids, MAX_IDS);
     if (n < 0) { l3m_free(m); return 1; }
     if (a->prompt) fputs(a->prompt, stdout);
     sink s = { m, NULL, 0 };
@@ -175,8 +177,8 @@ static int im_close(l3m_model *m, int32_t *ids, int n, int max) {   // "<|im_end
 // ChatML: the conversation's ids are kept and re-fed each turn, a reply ends at <|im_end|>; -p replaces the system prompt.
 static int cmd_chatml(l3m_model *m, const args *a, const char *system, int32_t im_start) {
     char line[4096];
-    int32_t ids[4096];
-    int n = 0, max = l3m_ctx(m) < 4096 ? l3m_ctx(m) : 4096;
+    int32_t ids[MAX_IDS];
+    int n = 0, max = MIN(l3m_ctx(m), MAX_IDS);
     if (a->prompt) system = a->prompt;
     if (*system) n = im_close(m, ids, im_open(m, im_start, "system", system, ids, 0, max), max);
     for (int turn = 0; n >= 0; turn++) {
@@ -186,7 +188,7 @@ static int cmd_chatml(l3m_model *m, const args *a, const char *system, int32_t i
         n = im_close(m, ids, im_open(m, im_start, "user", line, ids, n, max), max);
         if ((n = im_open(m, im_start, "assistant", "", ids, n, max - 2)) < 0) break;   // 2: room for the reply's "<|im_end|>\n"
         sink s = { m, ids + n, 0 };
-        l3m_generate(m, ids, n, a->max_new < max - 2 - n ? a->max_new : max - 2 - n, a->temperature, a->seed + (uint64_t)turn, collect_token, &s);
+        l3m_generate(m, ids, n, MIN(a->max_new, max - 2 - n), a->temperature, a->seed + (uint64_t)turn, collect_token, &s);
         for (int i = 0; i < s.n; i++) print_token(ids[n + i], &s);
         n = im_close(m, ids, n + s.n, max);
     }
@@ -202,18 +204,18 @@ static int cmd_chat(const args *a) {
     if (system) { int r = cmd_chatml(m, a, system, im_start); l3m_free(m); return r; }
     char history[1 << 16] = "", line[4096];
     int turn = 0;
-    int32_t ids[4096];
+    int32_t ids[MAX_IDS];
     if (a->prompt) snprintf(history, sizeof history, "%s\n", a->prompt);
     for (;;) {
         fputs("\n> ", stdout); fflush(stdout);
         if (!fgets(line, sizeof line, stdin)) break;
         if (strlen(history) + strlen(line) + 1 >= sizeof history) { fprintf(stderr, "l3m: history full\n"); break; }
         strcat(history, line);
-        int n = encode(m, history, ids, 4096);
+        int n = encode(m, history, ids, MAX_IDS);
         if (n < 0) { fprintf(stderr, "l3m: the conversation fills the context, ending\n"); break; }
-        int32_t out[4096];
+        int32_t out[MAX_IDS];
         sink s = { m, out, 0 };
-        int made = l3m_generate(m, ids, n, a->max_new < 4096 ? a->max_new : 4096, a->temperature, a->seed + (uint64_t)turn++, collect_token, &s);
+        int made = l3m_generate(m, ids, n, MIN(a->max_new, MAX_IDS), a->temperature, a->seed + (uint64_t)turn++, collect_token, &s);
         for (int i = 0; i < made; i++) {
             int len;
             const char *b = l3m_decode(m, out[i], &len);
@@ -245,7 +247,7 @@ static int cmd_bench(const args *a) {
         l3m_generate(m, &bos, 1, 16, 0.f, 0, collect_token, &s);   // warm up, then reset counters
         l3m_perf_read(m, &p);
         s.n = 0;
-        int n = a->max_new < 8192 ? a->max_new : 8192;
+        int n = MIN(a->max_new, (int)(sizeof out / sizeof *out));
         while (s.n < n && l3m_generate(m, &bos, 1, n - s.n, 0.f, 0, collect_token, &s)) {}   // again after an end of text
         if (!md) perf_line(m, stdout);
         else if (l3m_perf_read(m, &p)) printf("| %s | no tokens |\n", l3m_describe(m));
@@ -272,9 +274,9 @@ static double kl(const float *lr, const float *lf, int n) {
 // Fast path vs reference: judged by KL < 0.01 nats and argmax; greedy tokens are informational.
 static int cmd_check(const args *a) {
     l3m_model *ref = load(a, 1), *fast = load(a, 0);
-    int32_t ids[4096], tr[64], tf[64];
+    int32_t ids[MAX_IDS], tr[64], tf[64];
     const char *prompt = a->prompt ? a->prompt : "Once upon a time";
-    int n = encode(ref, prompt, ids, 4096), vocab = l3m_vocab(ref);
+    int n = encode(ref, prompt, ids, MAX_IDS), vocab = l3m_vocab(ref);
     if (n < 0) { l3m_free(ref); l3m_free(fast); return 1; }
 
     l3m_generate(ref, ids, n, 0, 0.f, 0, NULL, NULL);
@@ -303,9 +305,9 @@ static int cmd_check(const args *a) {
 
 static int cmd_info(const args *a) {
     FILE *f = fopen(a->model, "rb");
-    if (!f) { perror(a->model); return 1; }
+    if (!f) { fprintf(stderr, "l3m: %s: %s\n", a->model, strerror(errno)); return 1; }
     l3m_header h;
-    if (fread(&h, sizeof h, 1, f) != 1 || !l3m_header_ok(&h)) { fprintf(stderr, "l3m: %s: not an l3m file\n", a->model); fclose(f); return 1; }
+    if (fread(&h, sizeof h, 1, f) != 1 || !l3m_header_ok(&h)) { fprintf(stderr, "l3m: %s: not an l3m v%d file\n", a->model, L3M_VERSION); fclose(f); return 1; }
     printf("%s  arch %.16s  flags 0x%x\n", a->model, h.arch, h.flags);
     printf("dim %u  layers %u  heads %u  kv_heads %u  ffn %u  vocab %u  ctx %u  rope_theta %g  eps %g\n",
            h.dim, h.n_layers, h.n_heads, h.n_kv_heads, h.ffn_dim, h.vocab, h.ctx, h.rope_theta, h.norm_eps);

@@ -1,7 +1,4 @@
-"""Export a model from models/<name>.py to a .l3m file (layout: src/model.h, blocks: ggml's).
-
-    uv run l3m-export stories15M [--dtype f32|bf16|q8_0|q4_0|mxfp4] [--head-dtype ...] [-o out.l3m]
-"""
+"""Export a model from models/<name>.py to a .l3m file (layout: src/model.h, blocks: ggml's)."""
 import argparse
 import importlib.util
 import struct
@@ -21,8 +18,6 @@ MiB = 1 << 20
 def roundf(x):  # C roundf: half away from zero
     return np.sign(x) * np.floor(np.abs(x).astype(np.float64) + 0.5)
 
-
-# ---------------------------------------------------------------- quantizers
 
 def to_bf16(x):
     u = x.astype(np.float32).view(np.uint32)
@@ -65,8 +60,6 @@ def encode(x, dtype, d=None):
         raise ValueError(f"{dtype}: inputs {x.shape[-1]} not a multiple of 32")
     return (q4_0(x, d) if dtype == "q4_0" else {"q8_0": q8_0, "mxfp4": mxfp4}[dtype](x)).tobytes()
 
-
-# ---------------------------------------------------------------- writer
 
 def tensor_dtype(name, m, dtype, head_dtype):
     """Matrices take the body dtype, the lm_head (the embed when tied) its own, vectors and gathers f32."""
@@ -122,7 +115,6 @@ def summary(m, sizes, out):
 
 
 def load_spec(name):
-    """A name in models/, or a path to a spec file."""
     path = Path(name) if name.endswith(".py") or "/" in name else ROOT / "models" / f"{name}.py"
     if not path.exists():
         raise SystemExit(f"no model spec {path}: a name in {ROOT / 'models'}, or a path to a spec file")
@@ -133,7 +125,7 @@ def load_spec(name):
 
 
 def load_model(spec):
-    return archs.random(spec) if spec.source == "random" else getattr(archs, spec.source)(spec.repo, spec.weights)
+    return getattr(archs, spec.source)(spec)
 
 
 def export(name, dtype=None, head_dtype=None, out=None):
@@ -153,7 +145,7 @@ def export(name, dtype=None, head_dtype=None, out=None):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("model", help="name of a file in models/, or a path to a spec file")
     p.add_argument("--dtype", choices=DTYPES, help="weight dtype, default from the model file")
     p.add_argument("--head-dtype", choices=DTYPES, help="lm_head dtype, default from the model file, else finer than a quantized --dtype")

@@ -1,4 +1,3 @@
-// Machine topology from sysfs, per-core cache budgets, thread pinning, huge-page allocation.
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
@@ -7,6 +6,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include "hw.h"
+#include "l3m.h"
 
 // Read a small sysfs file into buf, under $L3M_SYSFS if set (for tests); 0 on success.
 static int read_str(char *buf, size_t n, const char *fmt, int cpu, int idx) {
@@ -36,14 +36,21 @@ static size_t read_size(const char *fmt, int cpu, int idx) {
     return *end == 'K' ? v << 10 : *end == 'M' ? v << 20 : v;
 }
 
-// CPUs in a sysfs list such as "0-3,8,10-11".
-static int list_count(const char *s) {
-    int n = 0;
-    for (char *end; *s; s = *end ? end + 1 : end) {
-        long a = strtol(s, &end, 10), b = *end == '-' ? strtol(end + 1, &end, 10) : a;
-        n += (int)(b - a + 1);
+int l3m_parse_cpus(const char *list, int *cpus, int max) {
+    for (int n = 0;; list++) {
+        char *end;
+        if (*list < '0' || *list > '9') return -1;
+        long a = strtol(list, &end, 10), b = a;
+        if (*end == '-') {
+            if (end[1] < '0' || end[1] > '9') return -1;
+            b = strtol(end + 1, &end, 10);
+        }
+        if (b < a || b >= L3M_MAX_CPUS) return -1;
+        for (long c = a; c <= b; c++) { if (n == max) return -1; cpus[n++] = (int)c; }
+        if (!*end) return n;
+        if (*end != ',') return -1;
+        list = end;
     }
-    return n;
 }
 
 int l3m_hw_probe(l3m_hw *hw) {
@@ -72,7 +79,8 @@ int l3m_hw_probe(l3m_hw *hw) {
             if (level == 2) {                            // split among the cores, not the SMT threads, that share it
                 char shared[256] = "";
                 read_str(shared, sizeof shared, "/sys/devices/system/cpu/cpu%d/cache/index%d/shared_cpu_list", cpu, i);
-                int threads = list_count(sib), cores = threads > 0 ? list_count(shared) / threads : 1;
+                int ids[L3M_MAX_CPUS], threads = l3m_parse_cpus(sib, ids, L3M_MAX_CPUS);
+                int cores = threads > 0 ? l3m_parse_cpus(shared, ids, L3M_MAX_CPUS) / threads : 1;
                 c->l2_bytes = read_size("/sys/devices/system/cpu/cpu%d/cache/index%d/size", cpu, i) / (cores > 0 ? cores : 1);
             }
             if (level == 3) {
@@ -130,23 +138,25 @@ size_t l3m_hw_nominal(const l3m_hw *hw, int cpu) {
 }
 
 // One line per L3 group, then one per distinct L2 share within it (P- and E-cores on hybrid parts).
-void l3m_hw_print(const l3m_hw *hw, FILE *out) {
-    fprintf(out, "%s: %d cores, %d L3 group%s\n", hw->name, hw->n_cores, hw->n_groups, hw->n_groups == 1 ? "" : "s");
-    for (int g = 0; g < hw->n_groups; g++) {
+void l3m_print_hw(FILE *out) {
+    l3m_hw hw;
+    if (l3m_hw_probe(&hw)) { fprintf(out, "topology unavailable\n"); return; }
+    fprintf(out, "%s: %d cores, %d L3 group%s\n", hw.name, hw.n_cores, hw.n_groups, hw.n_groups == 1 ? "" : "s");
+    for (int g = 0; g < hw.n_groups; g++) {
         double group = 0;
-        for (int i = 0; i < hw->n_cores; i++) if (hw->core[i].group == g) group += (double)l3m_hw_nominal(hw, hw->core[i].cpu);
-        fprintf(out, "  L3 %d: %5.1f MiB, %2d cores, %.1f MiB budget\n", g, hw->l3_bytes[g] / MiB, hw->group_cores[g],
+        for (int i = 0; i < hw.n_cores; i++) if (hw.core[i].group == g) group += (double)l3m_hw_nominal(&hw, hw.core[i].cpu);
+        fprintf(out, "  L3 %d: %5.1f MiB, %2d cores, %.1f MiB budget\n", g, hw.l3_bytes[g] / MiB, hw.group_cores[g],
                 group * L3M_RESIDENT_FRACTION / MiB);
-        for (int i = 0; i < hw->n_cores; i++) {
-            const l3m_core *c = &hw->core[i];
+        for (int i = 0; i < hw.n_cores; i++) {
+            const l3m_core *c = &hw.core[i];
             int first = c->group == g;
-            for (int j = 0; j < i && first; j++) first = hw->core[j].group != g || hw->core[j].l2_bytes != c->l2_bytes;
+            for (int j = 0; j < i && first; j++) first = hw.core[j].group != g || hw.core[j].l2_bytes != c->l2_bytes;
             if (!first) continue;
-            double nominal = (double)l3m_hw_nominal(hw, c->cpu);
+            double nominal = (double)l3m_hw_nominal(&hw, c->cpu);
             fprintf(out, "    L2 %.2f MiB per core, %.2f MiB nominal, %.2f budget, cpus", c->l2_bytes / MiB, nominal / MiB,
                     nominal * L3M_RESIDENT_FRACTION / MiB);
-            for (int j = i; j < hw->n_cores; j++)
-                if (hw->core[j].group == g && hw->core[j].l2_bytes == c->l2_bytes) fprintf(out, " %d", hw->core[j].cpu);
+            for (int j = i; j < hw.n_cores; j++)
+                if (hw.core[j].group == g && hw.core[j].l2_bytes == c->l2_bytes) fprintf(out, " %d", hw.core[j].cpu);
             fprintf(out, "\n");
         }
     }

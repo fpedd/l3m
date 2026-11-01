@@ -70,10 +70,10 @@ The closest prior work is
 (Zhang et al., 2026). It holds INT8 weights in the 1152 MB L3 of EPYC 9684X sockets, shards
 each GEMV by output channel across a socket's cores and pipelines layers across sockets. On
 Llama-3.2-3B and Llama-2-7B it reports 2 to 11.5x lower time per token than llama.cpp, but the
-paper publishes no code. l3m is partly inspired by it and aims to fill that gap: the same
-output-sharded, cache-resident GEMV, on one consumer CPU, in the open. It differs in the details:
-attention stays on the cores that own the heads, weights use ggml blocks rather than INT8, and
-each all-gather waits on a full barrier rather than per-head ready signals.
+paper publishes no code. l3m is partly inspired by it: the same output-sharded, cache-resident GEMV,
+on one consumer CPU, in the open. It differs in the details: attention stays on the cores that
+own the heads, weights use ggml blocks rather than INT8, and each all-gather waits on a full
+barrier rather than per-head ready signals.
 
 SRAM-based accelerators such as Groq's LPU apply the same idea in hardware.
 

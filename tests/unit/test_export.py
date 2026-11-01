@@ -90,7 +90,7 @@ def test_tensor_dtype_rules():
     assert export.tensor_dtype("embed", m, "q4_0", "q8_0") == "f32"
     assert export.tensor_dtype("lm_head", m, "q4_0", "q8_0") == "q8_0"
     assert export.tensor_dtype("blk.0.wq", m, "q4_0", "q8_0") == "q4_0"
-    m.flags = export.archs.TIED
+    m.flags = archs.TIED
     assert export.tensor_dtype("embed", m, "q4_0", "q8_0") == "q8_0"
 
 
@@ -111,7 +111,7 @@ def test_header_and_toc(exports, spec):
     for i in range(n_tensors):
         name, dtype, ndim, r0, r1, _, _, off, nbytes = struct.unpack_from("<64sIIQQQQQQ", raw, toc_off + i * 120)
         assert off % 64 == 0 and off + nbytes <= toc_off
-        if ndim == 2 and dtype == 2:
+        if ndim == 2 and dtype == export.DTYPES["q8_0"]:
             assert nbytes == r0 * (r1 // 32) * 34
 
 

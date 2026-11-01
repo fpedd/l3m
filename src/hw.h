@@ -1,7 +1,6 @@
 // Machine topology for the engine: cores, L3 groups, per-core cache budgets. Read from sysfs and /proc/cpuinfo.
 #pragma once
 #include <stddef.h>
-#include <stdio.h>
 
 #define L3M_MAX_CORES  256
 #define L3M_MAX_GROUPS 32
@@ -31,7 +30,6 @@ int    l3m_hw_probe(l3m_hw *hw);                                  // 0 on succes
 int    l3m_hw_core(const l3m_hw *hw, int cpu);                    // index into core, -1 if unknown
 size_t l3m_hw_l2(const l3m_hw *hw, int cpu);                      // this core's L2 share, 0 if unknown
 size_t l3m_hw_nominal(const l3m_hw *hw, int cpu);                 // L2 share + L3 / cores in that L3
-void   l3m_hw_print(const l3m_hw *hw, FILE *out);
 
 int    l3m_pin(int cpu);                                          // pin calling thread to one CPU
 void  *l3m_alloc_huge(size_t bytes);                              // 2 MiB aligned, MADV_HUGEPAGE, zeroed, mlocked

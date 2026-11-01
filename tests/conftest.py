@@ -12,12 +12,16 @@ ROOT = Path(__file__).resolve().parents[1]
 MODELS = ROOT / "tests" / "models"
 
 SPECS = ["tiny_llama", "tiny_gpt2"]
-DTYPES = ["f32", "bf16", "q8_0", "q4_0", "mxfp4"]
+DTYPES = list(export.DTYPES)
 CPUS = sorted(os.sched_getaffinity(0))
 
 
 def cores(n):
     return CPUS[:n]
+
+
+def call(cli, *args, **kw):
+    return subprocess.run([str(cli), *map(str, args)], capture_output=True, encoding="utf-8", errors="replace", **kw)
 
 
 def tiny_spec(name="tiny_llama"):
