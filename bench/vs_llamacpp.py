@@ -4,7 +4,8 @@
     uv run bench/vs_llamacpp.py stories15M.l3m ~/llama.cpp/gguf/stories15M-bf16.gguf --cores 0-7
 
 llama.cpp runs on the first t of --cores for each thread count t, so its best count is reported, not only
-the widest. Prompt processing is not measured: l3m feeds a prompt one token at a time.
+the widest. Other flags, such as --ctx and --force, go to l3m bench. Prompt processing is not measured:
+l3m feeds a prompt one token at a time.
 """
 import argparse
 import json
@@ -23,9 +24,9 @@ def expand(cores):
     return out
 
 
-def l3m_tps(path, cores, n, runs):
+def l3m_tps(path, cores, n, runs, extra):
     def once():
-        out = subprocess.run([ROOT / "l3m", "bench", path, "--cores", cores, "-n", str(n), "--md"],
+        out = subprocess.run([ROOT / "l3m", "bench", path, "--cores", cores, "-n", str(n), "--md", *extra],
                              capture_output=True, text=True, check=True).stdout
         return float(out.splitlines()[2].split("|")[2])
     return statistics.median(once() for _ in range(runs))
@@ -45,7 +46,7 @@ def main(argv=None):
     p.add_argument("--llama-cpp", default=str(Path.home() / "llama.cpp"), help="checkout with build/bin/llama-bench")
     p.add_argument("-n", type=int, default=256)
     p.add_argument("--runs", type=int, default=7)
-    a = p.parse_args(argv)
+    a, extra = p.parse_known_args(argv)
 
     lcpp, cpus = Path(a.llama_cpp), expand(a.cores)
     commit = subprocess.run(["git", "-C", lcpp, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -56,7 +57,7 @@ def main(argv=None):
         tps = llamacpp_tps(lcpp / "build/bin/llama-bench", a.gguf, cpus[:t], a.n, a.runs)
         best = max(best, tps)
         print(f"  llama.cpp {t:3d} threads {tps:10.0f} tok/s", flush=True)
-    tps = l3m_tps(a.l3m_file, a.cores, a.n, a.runs)
+    tps = l3m_tps(a.l3m_file, a.cores, a.n, a.runs, extra)
     print(f"  l3m       {len(cpus):3d} cores   {tps:10.0f} tok/s   {tps / best:.1f}x llama.cpp's best")
 
 
