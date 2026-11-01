@@ -9,8 +9,6 @@ from . import Model, archs, export
 DAMP, ALPHAS, NMAX = 0.01, np.linspace(0, 1, 21), np.linspace(7.5, 9.5, 41)
 
 
-# ---------------------------------------------------------------- numpy fp64 forward
-
 def rmsnorm(x, w, eps):
     return x / np.sqrt((x * x).mean(-1, keepdims=True) + eps) * w
 
@@ -77,8 +75,6 @@ def forward(m, ids, bf16_kv=False, stats=None):
     return linear(norm(x, "norm"), "lm_head" if "lm_head" in t else "embed")
 
 
-# ---------------------------------------------------------------- q4_0 rounding
-
 def f16(x):
     return x.astype(np.float16).astype(np.float64)
 
@@ -130,8 +126,6 @@ def gptq(W, H, B=128):
         W[:, i + B:] -= E @ U[i:i + B, i + B:]
     return Q, D
 
-
-# ---------------------------------------------------------------- AWQ
 
 def awq(t, h, mats, producers, hd):
     """Multiplies the input columns of mats by s = rms(x)^alpha, alpha the best of ALPHAS on the q4_0 output error

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Compare l3m against an independent reference: numpy fp64, or transformers for HF repos.
 
-    uv run bench/vs_hf.py [stories15M] [--dtype bf16 | --file model.l3m] [--prompt ...] [--new 32]
+    uv run bench/vs_hf.py stories15M [--dtype bf16] [--file model.l3m] [-p PROMPT] [-n 32]
 
-Passes if the export matches transformers (mean KL < 1e-8) and both paths are within 1e-3 nats of
-the reference, or for quantized weights the fast path is within 0.03 nats of the reference path.
+Passes if the export matches transformers (mean KL < 1e-8) and, for f32, both paths are within 1e-3 nats
+of the reference, otherwise the fast path is within 0.03 nats of the reference path.
 """
 import argparse
 import re
@@ -16,10 +16,6 @@ import numpy as np
 import l3m
 from l3m import export, quant
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-# ---------------------------------------------------------------- transformers
 
 def hf_forward(repo, ids):
     import torch
@@ -29,15 +25,12 @@ def hf_forward(repo, ids):
         return model(torch.tensor([ids])).logits[0].double().numpy()
 
 
-# ---------------------------------------------------------------- comparison
-
 def log_softmax(z):
     z = z - z.max(-1, keepdims=True)
     return z - np.log(np.exp(z).sum(-1, keepdims=True))
 
 
 def l3m_logits(model, ids):
-    """Logits at every position, one prefix at a time."""
     rows = []
     for i in range(len(ids)):
         model.generate(ids[:i + 1], 0)
@@ -55,17 +48,17 @@ def compare(name, ref, got):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("model", nargs="?", default="stories15M", help="name of a file in models/, or a path to a spec file")
+    p.add_argument("model", help="name of a file in models/, or a path to a spec file")
     p.add_argument("--dtype", choices=export.DTYPES, help="weight dtype, default from the model file")
-    p.add_argument("--prompt", default="Once upon a time, there was a little girl named Lily.")
-    p.add_argument("--new", type=int, default=32, help="greedy tokens to check")
+    p.add_argument("-p", "--prompt", default="Once upon a time, there was a little girl named Lily.")
+    p.add_argument("-n", type=int, default=32, help="greedy tokens to check")
     p.add_argument("--file", help=".l3m to test, default <model>[-<dtype>].l3m (exported if missing)")
     a = p.parse_args(argv)
 
     spec = export.load_spec(a.model)
-    path = Path(a.file) if a.file else ROOT / f"{Path(a.model).stem}{f'-{a.dtype}' if a.dtype else ''}.l3m"
+    path = Path(a.file) if a.file else Path(f"{Path(a.model).stem}{f'-{a.dtype}' if a.dtype else ''}.l3m")
     if not path.exists():
-        export.export(a.model, a.dtype or spec.dtype, out=path)
+        export.export(a.model, a.dtype, out=path)
     fast, slow = l3m.Model(path, force=True), l3m.Model(path, reference=True)
     print(fast.describe())
     dtype = re.search(r": (\w+), \d+ layers", fast.describe())[1]
@@ -77,7 +70,7 @@ def main(argv=None):
     else:
         ids = fast.encode(a.prompt)
 
-    gen = fast.generate(ids, max(0, min(a.new, fast.ctx - 1 - len(ids))), temperature=0.0)
+    gen = fast.generate(ids, max(0, min(a.n, fast.ctx - 1 - len(ids))), temperature=0.0)
     seq = ids + gen
     ref = quant.forward(export.load_model(spec), seq)
     print(f"prompt {len(ids)} tokens + {len(gen)} greedy: {fast.decode(seq)!r}")

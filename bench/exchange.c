@@ -44,20 +44,20 @@ static void xchg_job(l3m_pool *p, int rank, void *v) {
 }
 
 int main(int argc, char **argv) {
-    const char *cpulist = NULL;                     // default: the first 8 physical cores
+    const char *cores = NULL;                        // default: the first 8 physical cores
     int iters = 100000;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--cpus") && i + 1 < argc) cpulist = argv[++i];
+        if (!strcmp(argv[i], "--cores") && i + 1 < argc) cores = argv[++i];
         else if (!strcmp(argv[i], "--iters") && i + 1 < argc) iters = atoi(argv[++i]);
-        else { fprintf(stderr, "usage: %s [--cpus 0-7] [--iters 100000]\n", argv[0]); return 1; }
+        else { fprintf(stderr, "usage: %s [--cores 0-7] [--iters 100000]\n", argv[0]); return 1; }
     }
-    int cpus[L3M_MAX_CORES], n = cpulist ? l3m_parse_cpus(cpulist, cpus, L3M_MAX_CORES) : 0;
+    int cpus[L3M_MAX_CORES], n = cores ? l3m_parse_cpus(cores, cpus, L3M_MAX_CORES) : 0;
     l3m_hw hw;
-    if (!cpulist && !l3m_hw_probe(&hw)) for (; n < hw.n_cores && n < 8; n++) cpus[n] = hw.core[n].cpu;
-    if (n < 1) { fprintf(stderr, "bad cpu list\n"); return 1; }
+    if (!cores && !l3m_hw_probe(&hw)) for (; n < hw.n_cores && n < 8; n++) cpus[n] = hw.core[n].cpu;
+    if (n < 1) { fprintf(stderr, "bad --cores\n"); return 1; }
     if (iters < CHUNK) iters = CHUNK;
     l3m_pool *pool = l3m_pool_start(cpus, n);
-    if (!pool) { fprintf(stderr, "bad cpu list\n"); return 1; }
+    if (!pool) { fprintf(stderr, "bad --cores\n"); return 1; }
     printf("%d cores (cpus", n); for (int i = 0; i < n; i++) printf(" %d", cpus[i]);
     printf("), median over %d iterations\n%-22s %11s %11s\n", iters, "exchange", "min rank", "max rank");
     int dims[] = {0, 768, 3072};

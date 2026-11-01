@@ -35,7 +35,7 @@ typedef struct {
 typedef struct {
     int      rank, cpu;
     int      head_lo, head_hi;            // owned query heads
-    int      kv_lo, kv_hi;                // the kv heads they read, shared with a neighbour when a group is split
+    int      kv_lo, kv_hi;                // the kv heads they read, shared with a neighbour when a kv head's queries are split
     int      d_lo, d_hi, f_lo, f_hi, v_lo, v_hi;   // owned tiles of dim-, ffn- and vocab-sized outputs
     layer_w *layer;
     shard    lm_head;
@@ -63,7 +63,7 @@ struct l3m_model {
     const l3m_kernels *kk;
     l3m_pool          *pool;
     l3m_ref           *ref;                // set instead of the pool in reference mode
-    int                n, dim, hd, ffn, vocab, ctx, n_heads, group, n_layers;   // group: query heads per kv head
+    int                n, dim, hd, ffn, vocab, ctx, n_heads, heads_per_kv, n_layers;
     unsigned           flags;
     int                cold;
     float              eps, theta;
@@ -105,8 +105,6 @@ static void *arena_alloc(worker *w, size_t bytes) {   // bump allocator; sizing 
     w->arena_used += (bytes + 63) & ~(size_t)63;
     return p;
 }
-
-// ---- building shards ----------------------------------------------------------------------
 
 // Pack rows[0..n) (file layout, NULL = zero row) into whole tiles in the rank's arena.
 static shard build(worker *w, int dtype, int k, const void **rows, int n) {
@@ -213,8 +211,6 @@ static void deal_vocab(l3m_model *m) {
     }
 }
 
-// ---- the forward pass, one rank -----------------------------------------------------------
-
 static void norm(const l3m_model *m, float *y, const float *x, const float *w, const float *b) {
     if (m->flags & L3M_F_LAYERNORM) l3m_layernorm(y, x, w, b, m->dim, m->eps);
     else l3m_rmsnorm(y, x, w, m->dim, m->eps);
@@ -251,7 +247,7 @@ static void forward(l3m_model *m, worker *w, int32_t tok, int pos, int want_logi
             uint16_t *kc = L->kc + (size_t)pos * nkv * hd, *vc = L->vc + (size_t)pos * nkv * hd;
             for (int i = 0; i < nkv * hd; i++) { kc[i] = l3m_f32_to_bf16(k[i]); vc[i] = l3m_f32_to_bf16(v[i]); }
             for (int j = 0; j < nloc; j++) {
-                int kvj = (w->head_lo + j) / m->group - w->kv_lo;
+                int kvj = (w->head_lo + j) / m->heads_per_kv - w->kv_lo;
                 m->kk->attend(s->attn + (w->head_lo + j) * hd, q + j * hd, L->kc + kvj * hd, L->vc + kvj * hd, pos, hd, nkv * hd);
             }
         }
@@ -389,8 +385,6 @@ static void generate_ref(l3m_model *m) {   // the same loop on one thread
     m->tokens += pos + 1;
 }
 
-// ---- public API ---------------------------------------------------------------------------
-
 // One allowed CPU per physical core of the largest L3, or of every L3 when wide.
 static int default_cpus(const l3m_hw *hw, int wide, int *cpus) {
     cpu_set_t ok;
@@ -435,7 +429,7 @@ l3m_model *l3m_load(const char *path, const l3m_opts *opts) {
     memset(m, 0, sizeof *m);
     if (l3m_file_open(&m->f, path)) { free(m); return NULL; }
     const l3m_header *h = m->f.h;
-    m->dim = h->dim; m->n_heads = h->n_heads; m->group = h->n_heads / h->n_kv_heads; m->hd = h->dim / h->n_heads;
+    m->dim = h->dim; m->n_heads = h->n_heads; m->heads_per_kv = h->n_heads / h->n_kv_heads; m->hd = h->dim / h->n_heads;
     m->ffn = h->ffn_dim; m->vocab = h->vocab; m->n_layers = h->n_layers; m->flags = h->flags;
     m->eps = h->norm_eps; m->theta = h->rope_theta; m->cold = o.cold;
     m->ctx = MIN((int)h->ctx, o.ctx > 0 ? o.ctx : L3M_DEFAULT_CTX);
@@ -475,8 +469,8 @@ l3m_model *l3m_load(const char *path, const l3m_opts *opts) {
         w->rank = r; w->cpu = cpus[r];
         w->layer = calloc(m->n_layers, sizeof *w->layer);
         split(m->n_heads, n, r, &w->head_lo, &w->head_hi);
-        w->kv_lo = w->head_lo / m->group;
-        w->kv_hi = w->head_hi > w->head_lo ? (w->head_hi - 1) / m->group + 1 : w->kv_lo;
+        w->kv_lo = w->head_lo / m->heads_per_kv;
+        w->kv_hi = w->head_hi > w->head_lo ? (w->head_hi - 1) / m->heads_per_kv + 1 : w->kv_lo;
         split(tiles_of(m->dim), n, r, &w->d_lo, &w->d_hi);
         split(tiles_of(m->ffn), n, r, &w->f_lo, &w->f_hi);
         w->x = calloc(m->dim, sizeof(float));
@@ -559,7 +553,6 @@ int l3m_generate(l3m_model *m, const int32_t *prompt, int n_prompt, int max_new,
         if (prompt[i] < 0 || prompt[i] >= m->vocab) { fprintf(stderr, "l3m: token %d out of range\n", prompt[i]); return -1; }
     m->prompt = prompt; m->n_prompt = n_prompt; m->max_new = max_new; m->n_gen = 0;
     m->temp = temperature; m->rng = seed * 0x9E3779B97F4A7C15ULL + 1; m->on_token = on_token; m->user = user;
-    m->sh.stop[0] = m->sh.stop[1] = 0;
     double t0 = l3m_now_ns();
     if (m->ref) generate_ref(m);
     else l3m_pool_run(m->pool, job_generate, m);
@@ -596,7 +589,6 @@ int l3m_perf_read(l3m_model *m, l3m_perf *out) {
     out->ns_wait = dwait / tokens;
     out->ns_compute = out->ns_token - out->ns_wait;
     out->bytes_token = (double)m->weight_bytes;
-    out->l2_bytes = 0;
     for (int r = 0; r < m->n; r++) out->l2_bytes += (double)l3m_hw_l2(&m->hw, m->w[r].cpu);
     if (m->hc) {
         l3m_counters c;
@@ -609,25 +601,3 @@ int l3m_perf_read(l3m_model *m, l3m_perf *out) {
     return 0;
 }
 
-int l3m_parse_cpus(const char *list, int *cpus, int max) {
-    for (int n = 0;; list++) {
-        char *end;
-        if (*list < '0' || *list > '9') return -1;
-        long a = strtol(list, &end, 10), b = a;
-        if (*end == '-') {
-            if (end[1] < '0' || end[1] > '9') return -1;
-            b = strtol(end + 1, &end, 10);
-        }
-        if (b < a || b >= L3M_MAX_CPUS) return -1;
-        for (long c = a; c <= b; c++) { if (n == max) return -1; cpus[n++] = (int)c; }
-        if (!*end) return n;
-        if (*end != ',') return -1;
-        list = end;
-    }
-}
-
-void l3m_print_hw(FILE *out) {
-    l3m_hw hw;
-    if (l3m_hw_probe(&hw)) { fprintf(out, "topology unavailable\n"); return; }
-    l3m_hw_print(&hw, out);
-}

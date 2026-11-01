@@ -1,4 +1,4 @@
-// The reference forward pass: one thread, fp32, no kernel table.
+// The reference forward pass and oracle for engine.c: one thread, fp32, no kernel table, every matrix dequantized at load.
 #pragma once
 #include <stdint.h>
 #include "file.h"

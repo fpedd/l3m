@@ -1,4 +1,3 @@
-// The reference forward pass: one thread, fp32, every matrix dequantized at load. The oracle for engine.c.
 #include <stdlib.h>
 #include <string.h>
 #include "kernels.h"

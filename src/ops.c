@@ -1,4 +1,3 @@
-// Norms, RoPE, attention, activations: plain C shared by the reference and the engine.
 #include <math.h>
 #include <stddef.h>
 #include "ops.h"

@@ -47,32 +47,32 @@ static void stream_job(l3m_pool *p, int rank, void *v) {
 }
 
 int main(int argc, char **argv) {
-    const char *cpulist = NULL, *mibs = "2,3,4,4.25,5";
+    const char *cores = NULL, *mibs = "2,3,4,4.25,5";
     double seconds = 1;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--cpus") && i + 1 < argc) cpulist = argv[++i];
+        if (!strcmp(argv[i], "--cores") && i + 1 < argc) cores = argv[++i];
         else if (!strcmp(argv[i], "--mib") && i + 1 < argc) mibs = argv[++i];
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = atof(argv[++i]);
         else if (!strcmp(argv[i], "--pages") && i + 1 < argc && !strcmp(argv[i + 1], "4k")) { setenv("L3M_NO_HUGEPAGES", "1", 1); i++; }
-        else { fprintf(stderr, "usage: %s [--cpus 0-15] [--mib 2,3,4,4.25,5] [--pages 4k] [--seconds 1]\n", argv[0]); return 1; }
+        else { fprintf(stderr, "usage: %s [--cores 0-15] [--mib 2,3,4,4.25,5] [--pages 4k] [--seconds 1]\n", argv[0]); return 1; }
     }
     l3m_hw hw;
     if (l3m_hw_probe(&hw)) { fprintf(stderr, "cannot read topology\n"); return 1; }
     int cpus[L3M_MAX_CORES], n;
-    if (cpulist) n = l3m_parse_cpus(cpulist, cpus, L3M_MAX_CORES);
+    if (cores) n = l3m_parse_cpus(cores, cpus, L3M_MAX_CORES);
     else { n = hw.n_cores; for (int i = 0; i < n; i++) cpus[i] = hw.core[i].cpu; }
-    if (n < 1) { fprintf(stderr, "bad cpu list\n"); return 1; }
-    l3m_hw_print(&hw, stdout);
+    if (n < 1) { fprintf(stderr, "bad --cores\n"); return 1; }
+    l3m_print_hw(stdout);
     l3m_hwcounters *hc = l3m_hwcounters_open(0);
     int missing = !hc;
     l3m_pool *pool = l3m_pool_start(cpus, n);
-    if (!pool) { fprintf(stderr, "bad cpu list\n"); return 1; }
+    if (!pool) { fprintf(stderr, "bad --cores\n"); return 1; }
 
     printf("\n%8s %8s %10s %10s %10s %10s %10s %10s\n", "MiB/core", "total", "min GB/s", "max GB/s", "aggregate", "L3miss/s", "DRAM GB/s", "LLC MiB");
     char *list = strdup(mibs);
     for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
         job_t *j = calloc(1, sizeof *j);
-        j->bytes = (size_t)(atof(tok) * 1048576.0) & ~(size_t)127;   // whole 128-byte steps of stream_job
+        j->bytes = (size_t)(atof(tok) * MiB) & ~(size_t)127;   // whole 128-byte steps of stream_job
         j->seconds = seconds;
         l3m_pool_run(pool, alloc_job, j);
         l3m_pool_run(pool, stream_job, j);               // warm-up
@@ -80,11 +80,11 @@ int main(int argc, char **argv) {
         if (hc) l3m_hwcounters_read(hc, &c);
         l3m_pool_run(pool, stream_job, j);
         if (hc) l3m_hwcounters_read(hc, &c);
-        missing |= !hc || isnan(c.l3_miss) || isnan(c.llc_occupancy);
+        missing |= isnan(c.l3_miss) || isnan(c.llc_occupancy);
         double lo = 1e30, hi = 0, agg = 0;
         for (int r = 0; r < n; r++) { lo = fmin(lo, j->gbs[r]); hi = fmax(hi, j->gbs[r]); agg += j->gbs[r]; }
-        printf("%8s %8.1f %10.1f %10.1f %10.1f %10.3g %10.1f %10.1f\n", tok, (double)j->bytes * n / 1048576.0, lo, hi, agg,
-               hc ? c.l3_miss / (c.ns * 1e-9) : NAN, hc ? c.dram_bytes / c.ns : NAN, hc ? c.llc_occupancy / 1048576.0 : NAN);
+        printf("%8s %8.1f %10.1f %10.1f %10.1f %10.3g %10.1f %10.1f\n", tok, (double)j->bytes * n / MiB, lo, hi, agg,
+               hc ? c.l3_miss / (c.ns * 1e-9) : NAN, hc ? c.dram_bytes / c.ns : NAN, hc ? c.llc_occupancy / MiB : NAN);
         for (int r = 0; r < n; r++) l3m_free_huge(j->shard[r], j->bytes);
         free(j);
     }

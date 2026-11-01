@@ -1,4 +1,5 @@
 // A mapped .l3m file, validated once at open so a malformed file is an error, never a bad read later.
+#include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -14,7 +15,7 @@
 static int bad(l3m_file *f, const char *path, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "%s: ", path);
+    fprintf(stderr, "l3m: %s: ", path);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);
@@ -37,13 +38,13 @@ static const char *tensor_error(const l3m_file *f, const l3m_tensor *t) {
 static int want(const l3m_file *f, const char *path, const char *name, int required, int f32, uint64_t rows, uint64_t cols) {
     const l3m_tensor *t = l3m_file_tensor(f, name);
     if (!t) {
-        if (required) fprintf(stderr, "%s: tensor %s missing\n", path, name);
+        if (required) fprintf(stderr, "l3m: %s: tensor %s missing\n", path, name);
         return required ? -1 : 0;
     }
     if (t->ndim != (cols ? 2u : 1u) || t->shape[0] != rows || (cols && t->shape[1] != cols) || (f32 && t->dtype != L3M_F32)) {
         char shape[48];
         snprintf(shape, sizeof shape, cols ? "[%llu, %llu]" : "[%llu]", (unsigned long long)rows, (unsigned long long)cols);
-        fprintf(stderr, "%s: tensor %s: expected %s%s\n", path, name, f32 ? "f32 " : "", shape);
+        fprintf(stderr, "l3m: %s: tensor %s: expected %s%s\n", path, name, f32 ? "f32 " : "", shape);
         return -1;
     }
     return 1;
@@ -55,7 +56,7 @@ static int check_model(const l3m_file *f, const char *path) {
     if (!dim || !ffn || !vocab || !h->ctx || !h->n_layers || !h->n_heads || !h->n_kv_heads || dim > MAX_DIM || ffn > MAX_DIM ||
         vocab > MAX_DIM || h->ctx > MAX_DIM || h->n_layers > MAX_DIM || dim % h->n_heads || h->n_heads % h->n_kv_heads ||
         dim / h->n_heads % 8) {
-        fprintf(stderr, "%s: bad config: dim %u, heads %u, kv_heads %u (head_dim a multiple of 8), ffn %u, layers %u, vocab %u, ctx %u\n",
+        fprintf(stderr, "l3m: %s: bad config: dim %u, heads %u, kv_heads %u (head_dim a multiple of 8), ffn %u, layers %u, vocab %u, ctx %u\n",
                 path, dim, h->n_heads, h->n_kv_heads, ffn, h->n_layers, vocab, h->ctx);
         return -1;
     }
@@ -88,7 +89,7 @@ static int check_model(const l3m_file *f, const char *path) {
         if (e || bq < 0 || bk < 0 || bv < 0) return -1;
         const l3m_tensor *q = l3m_file_blk(f, (int)l, "wq"), *k = l3m_file_blk(f, (int)l, "wk"), *v = l3m_file_blk(f, (int)l, "wv");
         if (bq != bk || bq != bv || k->dtype != q->dtype || v->dtype != q->dtype) {   // the engine packs q, k, v into one shard
-            fprintf(stderr, "%s: blk.%u: wq, wk, wv must share a dtype, and bq, bk, bv come together\n", path, l);
+            fprintf(stderr, "l3m: %s: blk.%u: wq, wk, wv must share a dtype, and bq, bk, bv come together\n", path, l);
             return -1;
         }
     }
@@ -99,7 +100,7 @@ static int check_model(const l3m_file *f, const char *path) {
 int l3m_file_open(l3m_file *f, const char *path) {
     memset(f, 0, sizeof *f);
     int fd = open(path, O_RDONLY);
-    if (fd < 0) { perror(path); return -1; }
+    if (fd < 0) return bad(f, path, "%s", strerror(errno));
     struct stat st;
     if (fstat(fd, &st) || !S_ISREG(st.st_mode) || (size_t)st.st_size < sizeof(l3m_header)) {
         close(fd);
@@ -108,7 +109,7 @@ int l3m_file_open(l3m_file *f, const char *path) {
     f->size = (size_t)st.st_size;
     f->map = mmap(NULL, f->size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
-    if (f->map == MAP_FAILED) { perror("mmap"); f->map = NULL; return -1; }
+    if (f->map == MAP_FAILED) { f->map = NULL; return bad(f, path, "mmap: %s", strerror(errno)); }
 
     const l3m_header *h = f->h = (const l3m_header *)f->map;
     if (!l3m_header_ok(h)) return bad(f, path, "not an l3m v%d file", L3M_VERSION);

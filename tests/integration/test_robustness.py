@@ -1,18 +1,13 @@
 import contextlib
 import os
 import struct
-import subprocess
 import threading
 
 import pytest
 
 import l3m
 from l3m import export
-from tests.conftest import ROOT, cores, tiny_spec, toc
-
-
-def run(cli, *args):
-    return subprocess.run([str(cli), *map(str, args)], capture_output=True, text=True)
+from tests.conftest import call, cores, tiny_spec, toc
 
 
 def patched(src, dst, edits):
@@ -47,7 +42,7 @@ CASES = {   # header: n_heads at 36, vocab 48, n_tensors 64, toc 72, chat 88
 def test_malformed_file_is_a_clean_error(cli, exports, tmp_path, case):
     edits, msg = CASES[case]
     path = patched(exports[("tiny_llama", "q4_0")], tmp_path / f"{case}.l3m", edits)
-    r = run(cli, "generate", path, "-n", 2, "-p", "hi", "--ref")
+    r = call(cli, "generate", path, "-n", 2, "-p", "hi", "--ref")
     assert r.returncode == 1 and msg in r.stderr, (r.returncode, r.stderr)
 
 
@@ -55,7 +50,7 @@ def test_qkv_biases_come_together(cli, tmp_path):
     m = export.load_model(tiny_spec("tiny_gpt2"))
     del m.tensors["blk.1.bk"]
     export.write(m, "f32", "f32", tmp_path / "bq.l3m")
-    r = run(cli, "generate", tmp_path / "bq.l3m", "-n", 2, "--ref")
+    r = call(cli, "generate", tmp_path / "bq.l3m", "-n", 2, "--ref")
     assert r.returncode == 1 and "come together" in r.stderr, r.stderr
 
 
@@ -64,9 +59,9 @@ def test_truncated_file(cli, exports, tmp_path):
     toc_off, tok_off = struct.unpack_from("<QQ", data, 72)
     for cut in (0, 100, 1024, toc_off + 10, tok_off + 3, len(data) - 1):
         (tmp_path / "cut.l3m").write_bytes(data[:cut])
-        r = run(cli, "generate", tmp_path / "cut.l3m", "-n", 2, "--ref")
+        r = call(cli, "generate", tmp_path / "cut.l3m", "-n", 2, "--ref")
         assert r.returncode == 1 and r.stderr, (cut, r.returncode)
-        assert run(cli, "info", tmp_path / "cut.l3m").returncode in (0, 1), cut
+        assert call(cli, "info", tmp_path / "cut.l3m").returncode in (0, 1), cut
 
 
 def test_bad_arguments(cli, exports, tmp_path):
@@ -75,11 +70,12 @@ def test_bad_arguments(cli, exports, tmp_path):
     for args, code in [(["generate", path, "--cores", "x"], 2), (["generate"], 2),
                        (["generate", tmp_path / "missing.l3m"], 1), (["generate", tmp_path / "zeros.l3m"], 1),
                        (["info", tmp_path / "zeros.l3m"], 1)]:
-        r = run(cli, *args)
+        r = call(cli, *args)
         assert r.returncode == code and r.stderr, (args, r.returncode)
     for bad in ("0,0", "0-", "-1", "4095", "4294967296"):
-        r = run(cli, "generate", path, "--cores", bad, "-n", 2)
+        r = call(cli, "generate", path, "--cores", bad, "-n", 2)
         assert r.returncode in (1, 2) and ("cores" in r.stderr or "cpu" in r.stderr), (bad, r.stderr)
+    assert "appears twice" in call(cli, "generate", path, "--cores", "0,0", "-n", 2).stderr
 
 
 def test_model_without_bos(exports, tmp_path):
@@ -89,9 +85,9 @@ def test_model_without_bos(exports, tmp_path):
 
 def test_prompt_must_fit_ctx(cli, exports):
     path = exports[("tiny_llama", "f32")]
-    r = run(cli, "check", path, "--ctx", 4)
+    r = call(cli, "check", path, "--ctx", 4)
     assert r.returncode == 1 and "PASS" not in r.stdout and "--ctx" in r.stderr
-    r = run(cli, "generate", path, "-p", "x" * 100, "-n", 2)
+    r = call(cli, "generate", path, "-p", "x" * 100, "-n", 2)
     assert r.returncode == 1 and "--ctx" in r.stderr
 
 
@@ -123,8 +119,6 @@ def test_bad_cpus_and_affinity(exports):
     for cpus in (cores(1) * 2, [100000], [-1]):
         with pytest.raises(RuntimeError):
             l3m.Model(path, cpus=cpus, force=True)
-    r = subprocess.run([str(ROOT / "l3m"), "generate", str(path), "--cores", f"{cores(1)[0]},{cores(1)[0]}"], capture_output=True, text=True)
-    assert r.returncode == 1 and "appears twice" in r.stderr
     before = os.sched_getaffinity(0)
     m = l3m.Model(path, cpus=cores(2), force=True)
     m.generate([1], 3)

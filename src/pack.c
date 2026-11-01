@@ -75,7 +75,7 @@ void l3m_pack_tile(void *dst, int dtype, const void *const rows[T], int k) {
             for (int i = 0; i < k; i++) w[(i / 2 * T + c) * 2 + i % 2] = ((const uint16_t *)rows[c])[i];
         return;
     }
-    // Quantized: per block { scales in file precision, bytes }. q8 bytes get +128; nibbles stay as in the file.
+    // Quantized: per block { scales in file precision, bytes }. q8 bytes get +128; nibbles regrouped as in kernels.h.
     size_t block_bytes = l3m_tile_bytes(dtype, QB), scale_bytes = dtype == L3M_MXFP4 ? T : 2 * T;
     for (int b = 0; b < k / QB; b++) {
         uint8_t *blk = (uint8_t *)dst + b * block_bytes;

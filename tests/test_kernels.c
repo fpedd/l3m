@@ -7,6 +7,8 @@
 #include "ops.h"
 #include "perf.h"
 
+#define QB L3M_QBLOCK
+
 static uint64_t rng = 0x9E3779B97F4A7C15ull;
 static float frand(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return (float)(int64_t)(rng >> 11) / (float)(1ll << 52) - 1.0f; }
 
@@ -23,34 +25,34 @@ static uint16_t f32_to_f16(float f) {             // nearest even, normal range 
 static void quantize_row(int dtype, void *dst, const float *x, int k) {
     if (dtype == L3M_F32) { memcpy(dst, x, k * 4); return; }
     if (dtype == L3M_BF16) { for (int i = 0; i < k; i++) ((uint16_t *)dst)[i] = l3m_f32_to_bf16(x[i]); return; }
-    for (int b = 0; b < k / 32; b++) {
-        const float *xb = x + b * 32;
+    for (int b = 0; b < k / QB; b++) {
+        const float *xb = x + b * QB;
         float amax = 0, max = 0;
-        for (int i = 0; i < 32; i++) if (fabsf(xb[i]) > amax) { amax = fabsf(xb[i]); max = xb[i]; }
+        for (int i = 0; i < QB; i++) if (fabsf(xb[i]) > amax) { amax = fabsf(xb[i]); max = xb[i]; }
         if (dtype == L3M_Q8_0) {
             l3m_block_q8_0 *q = (l3m_block_q8_0 *)dst + b;
             float d = amax / 127, id = d ? 1 / d : 0;
             q->d = f32_to_f16(d);
-            for (int i = 0; i < 32; i++) q->qs[i] = (int8_t)roundf(xb[i] * id);
+            for (int i = 0; i < QB; i++) q->qs[i] = (int8_t)roundf(xb[i] * id);
         } else if (dtype == L3M_Q4_0) {
             l3m_block_q4_0 *q = (l3m_block_q4_0 *)dst + b;
             float d = max / -8, id = d ? 1 / d : 0;
             q->d = f32_to_f16(d);
-            for (int i = 0; i < 16; i++) {
-                int lo = (int)(xb[i] * id + 8.5f), hi = (int)(xb[i + 16] * id + 8.5f);
+            for (int i = 0; i < QB / 2; i++) {
+                int lo = (int)(xb[i] * id + 8.5f), hi = (int)(xb[i + QB / 2] * id + 8.5f);
                 q->qs[i] = (uint8_t)((lo > 15 ? 15 : lo) | (hi > 15 ? 15 : hi) << 4);
             }
         } else {
             l3m_block_mxfp4 *q = (l3m_block_mxfp4 *)dst + b;
             q->e = amax > 0 ? (uint8_t)(floorf(log2f(amax)) - 2 + 127) : 0;
             float id = amax > 0 ? ldexpf(1.0f, 128 - q->e) : 0;
-            uint8_t nib[32];
-            for (int i = 0; i < 32; i++) {          // nearest doubled-e2m1 magnitude, sign in bit 3
+            uint8_t nib[QB];
+            for (int i = 0; i < QB; i++) {          // nearest doubled-e2m1 magnitude, sign in bit 3
                 float v = fabsf(xb[i]) * id; int best = 0;
                 for (int m = 1; m < 8; m++) if (fabsf(v - L3M_MXFP4_LUT[m]) < fabsf(v - L3M_MXFP4_LUT[best])) best = m;
                 nib[i] = (uint8_t)(best | (xb[i] < 0 && best ? 8 : 0));
             }
-            for (int i = 0; i < 16; i++) q->qs[i] = (uint8_t)(nib[i] | nib[i + 16] << 4);
+            for (int i = 0; i < QB / 2; i++) q->qs[i] = (uint8_t)(nib[i] | nib[i + QB / 2] << 4);
         }
     }
 }
@@ -59,8 +61,8 @@ static const l3m_kernels *const TABLES[3] = { &l3m_kernels_scalar, &l3m_kernels_
 
 // Legal values the quantizers never produce: q8_0 weight -128, subnormal mxfp4 scales, and (in check) a zero activation block.
 static void extremes(int dtype, uint8_t *row, int k, int r) {
-    for (int b = 0; b < k / 32; b++) {
-        if (dtype == L3M_Q8_0) ((l3m_block_q8_0 *)row)[b].qs[b % 32] = -128;
+    for (int b = 0; b < k / QB; b++) {
+        if (dtype == L3M_Q8_0) ((l3m_block_q8_0 *)row)[b].qs[b % QB] = -128;
         if (dtype == L3M_MXFP4) ((l3m_block_mxfp4 *)row)[b].e = (uint8_t)((r + b) % 3);
     }
 }
@@ -79,7 +81,7 @@ static int check(int dtype, int ntiles, int k, int missing, int edge) {
         quantize_row(dtype, rows + r * rb, src, k);
         if (edge) extremes(dtype, rows + r * rb, k, r);
     }
-    for (int i = 0; i < k; i++) x[i] = edge && i < 32 ? 0 : frand() * 4;
+    for (int i = 0; i < k; i++) x[i] = edge && i < QB ? 0 : frand() * 4;
     for (int t = 0; t < ntiles; t++) {
         for (int c = 0; c < L3M_TILE; c++) rp[c] = (t * L3M_TILE + c < n - missing) ? rows + (t * L3M_TILE + c) * rb : NULL;
         l3m_pack_tile(tiles + t * tb, dtype, rp, k);
@@ -92,7 +94,7 @@ static int check(int dtype, int ntiles, int k, int missing, int edge) {
         l3m_dequant_row(deq, dtype, rows + r * rb, k);
         double abs_sum = 0;
         for (int i = 0; i < k; i++) {
-            double xi = v.q8 ? v.q8[i] * (double)v.scale[i / 32] : v.bf16 ? l3m_bf16_to_f32(v.bf16[i]) : x[i];
+            double xi = v.q8 ? v.q8[i] * (double)v.scale[i / QB] : v.bf16 ? l3m_bf16_to_f32(v.bf16[i]) : x[i];
             ref[r] += (double)deq[i] * xi;
             ref_x[r] += (double)deq[i] * x[i];
             abs_sum += fabs((double)deq[i] * x[i]);

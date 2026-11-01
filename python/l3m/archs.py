@@ -42,11 +42,9 @@ class Model:
     chat: tuple = None                            # ChatML: (<|im_start|> id, default system prompt); eos is <|im_end|>
 
 
-# ---------------------------------------------------------------- llama2.c .bin
-
-def llama2c(repo, weights):
+def llama2c(spec):
     """Karpathy's legacy .bin: 7 int32 header, then fp32 weights in export order."""
-    path = hf_hub_download(repo, weights)
+    path = hf_hub_download(spec.repo, spec.weights)
     raw = np.memmap(path, dtype=np.uint8, mode="r")
     dim, ffn, L, H, KV, vocab, ctx = struct.unpack("<7i", raw[:28].tobytes())
     tied, vocab = vocab > 0, abs(vocab)
@@ -61,7 +59,7 @@ def llama2c(repo, weights):
         pos += n
         return out
 
-    m = Model("llama", TIED if tied else 0, dim, L, H, KV, ffn, vocab, ctx, 10000.0, 1e-5)
+    m = Model("llama", SP_PREFIX | (TIED if tied else 0), dim, L, H, KV, ffn, vocab, ctx, 10000.0, 1e-5)
     t = m.tensors
     t["embed"] = take(vocab, dim)
     attn_norm, wq, wk, wv, wo = take(L, dim), take(L, dim, dim), take(L, kvd, dim), take(L, kvd, dim), take(L, dim, dim)
@@ -71,10 +69,10 @@ def llama2c(repo, weights):
     if not tied:
         t["lm_head"] = take(vocab, dim)
     for i in range(L):
-        t[f"blk.{i}.attn_norm"], t[f"blk.{i}.wq"], t[f"blk.{i}.wk"], t[f"blk.{i}.wv"], t[f"blk.{i}.wo"] = attn_norm[i], wq[i], wk[i], wv[i], wo[i]
-        t[f"blk.{i}.ffn_norm"], t[f"blk.{i}.w_gate"], t[f"blk.{i}.w_up"], t[f"blk.{i}.w_down"] = ffn_norm[i], w_gate[i], w_up[i], w_down[i]
+        b = f"blk.{i}."
+        t[b + "attn_norm"], t[b + "wq"], t[b + "wk"], t[b + "wv"], t[b + "wo"] = attn_norm[i], wq[i], wk[i], wv[i], wo[i]
+        t[b + "ffn_norm"], t[b + "w_gate"], t[b + "w_up"], t[b + "w_down"] = ffn_norm[i], w_gate[i], w_up[i], w_down[i]
     m.tokens, m.bos, m.eos = llama2c_tokenizer(vocab), 1, 2
-    m.flags |= SP_PREFIX
     return m
 
 
@@ -106,8 +104,6 @@ def sp_piece(piece, score):
     return piece.replace("▁", " ").encode("utf-8"), score
 
 
-# ---------------------------------------------------------------- HF weights: safetensors or a PyTorch zip
-
 def to_f32(buf, dtype):
     """Raw little-endian F32, F16, BOOL or BF16 (which numpy lacks) -> float32."""
     if dtype == "BF16":
@@ -116,7 +112,6 @@ def to_f32(buf, dtype):
 
 
 def safetensors(path):
-    """.safetensors -> float32 arrays."""
     raw = np.memmap(path, dtype=np.uint8, mode="r")
     n = struct.unpack("<Q", raw[:8].tobytes())[0]
     header, base = json.loads(raw[8:8 + n].tobytes()), 8 + n
@@ -154,10 +149,11 @@ def torch_bin(path):
     return Unpickler(z.open(f"{root}/data.pkl")).load()
 
 
-def hf_files(repo, weights):
-    cfg = json.loads(Path(hf_hub_download(repo, "config.json")).read_text())
-    path = hf_hub_download(repo, weights or "model.safetensors")
-    return cfg, safetensors(path) if path.endswith(".safetensors") else torch_bin(path)
+def hf_files(spec):
+    cfg = json.loads(Path(hf_hub_download(spec.repo, "config.json")).read_text())
+    path = hf_hub_download(spec.repo, spec.weights or "model.safetensors")
+    w = safetensors(path) if path.endswith(".safetensors") else torch_bin(path)
+    return cfg, {k.removeprefix("transformer."): v for k, v in w.items()}
 
 
 def unpermute(w, n_heads):
@@ -166,13 +162,13 @@ def unpermute(w, n_heads):
     return w.reshape(n_heads, 2, hd // 2, -1).transpose(0, 2, 1, 3).reshape(w.shape)
 
 
-def hf_llama(repo, weights=None):
-    cfg, w = hf_files(repo, weights)
+def hf_llama(spec):
+    cfg, w = hf_files(spec)
     H, KV = cfg["num_attention_heads"], cfg.get("num_key_value_heads", cfg["num_attention_heads"])
     tied = cfg.get("tie_word_embeddings", False)
     if (cfg.get("hidden_act", "silu") != "silu" or cfg.get("head_dim", cfg["hidden_size"] // H) != cfg["hidden_size"] // H
             or any(cfg.get(k) for k in ("rope_scaling", "attention_bias", "mlp_bias"))):
-        raise ValueError(f"{repo}: unsupported llama config")
+        raise ValueError(f"{spec.repo}: unsupported llama config")
     m = Model("llama", TIED if tied else 0, cfg["hidden_size"], cfg["num_hidden_layers"], H, KV,
               cfg["intermediate_size"], cfg["vocab_size"], cfg["max_position_embeddings"],
               cfg.get("rope_theta", 10000.0), cfg["rms_norm_eps"])
@@ -181,22 +177,21 @@ def hf_llama(repo, weights=None):
     if not tied:
         t["lm_head"] = w["lm_head.weight"]
     for i in range(m.n_layers):
-        p = f"model.layers.{i}."
-        t[f"blk.{i}.attn_norm"], t[f"blk.{i}.ffn_norm"] = w[p + "input_layernorm.weight"], w[p + "post_attention_layernorm.weight"]
-        t[f"blk.{i}.wq"], t[f"blk.{i}.wk"] = unpermute(w[p + "self_attn.q_proj.weight"], H), unpermute(w[p + "self_attn.k_proj.weight"], KV)
-        t[f"blk.{i}.wv"], t[f"blk.{i}.wo"] = w[p + "self_attn.v_proj.weight"], w[p + "self_attn.o_proj.weight"]
-        t[f"blk.{i}.w_gate"], t[f"blk.{i}.w_up"], t[f"blk.{i}.w_down"] = w[p + "mlp.gate_proj.weight"], w[p + "mlp.up_proj.weight"], w[p + "mlp.down_proj.weight"]
-    m.tokens, tok_flags = hf_tokens(repo, m.vocab)
+        b, p = f"blk.{i}.", f"model.layers.{i}."
+        t[b + "attn_norm"], t[b + "ffn_norm"] = w[p + "input_layernorm.weight"], w[p + "post_attention_layernorm.weight"]
+        t[b + "wq"], t[b + "wk"] = unpermute(w[p + "self_attn.q_proj.weight"], H), unpermute(w[p + "self_attn.k_proj.weight"], KV)
+        t[b + "wv"], t[b + "wo"] = w[p + "self_attn.v_proj.weight"], w[p + "self_attn.o_proj.weight"]
+        t[b + "w_gate"], t[b + "w_up"], t[b + "w_down"] = w[p + "mlp.gate_proj.weight"], w[p + "mlp.up_proj.weight"], w[p + "mlp.down_proj.weight"]
+    m.tokens, tok_flags = hf_tokens(spec.repo, m.vocab)
     m.flags |= tok_flags
     eos = cfg.get("eos_token_id", -1)
     m.bos, m.eos = cfg.get("bos_token_id", -1), eos[0] if isinstance(eos, list) else eos
-    chatml(repo, m)
+    chatml(spec.repo, m)
     return m
 
 
-def hf_gpt2(repo, weights=None):
-    cfg, w = hf_files(repo, weights)
-    w = {k.removeprefix("transformer."): v for k, v in w.items()}
+def hf_gpt2(spec):
+    cfg, w = hf_files(spec)
     dim, L = cfg["n_embd"], cfg["n_layer"]
     m = Model("gpt2", LAYERNORM | LEARNED_POS | GELU | TIED, dim, L, cfg["n_head"], cfg["n_head"],
               cfg.get("n_inner") or 4 * dim, cfg["vocab_size"], cfg["n_positions"], 0.0, cfg["layer_norm_epsilon"])
@@ -204,26 +199,25 @@ def hf_gpt2(repo, weights=None):
     t["embed"], t["pos_embed"] = w["wte.weight"], w["wpe.weight"]
     t["norm"], t["norm_b"] = w["ln_f.weight"], w["ln_f.bias"]
     for i in range(L):
-        p = f"h.{i}."
-        t[f"blk.{i}.attn_norm"], t[f"blk.{i}.attn_norm_b"] = w[p + "ln_1.weight"], w[p + "ln_1.bias"]
-        t[f"blk.{i}.ffn_norm"], t[f"blk.{i}.ffn_norm_b"] = w[p + "ln_2.weight"], w[p + "ln_2.bias"]
+        b, p = f"blk.{i}.", f"h.{i}."
+        t[b + "attn_norm"], t[b + "attn_norm_b"] = w[p + "ln_1.weight"], w[p + "ln_1.bias"]
+        t[b + "ffn_norm"], t[b + "ffn_norm_b"] = w[p + "ln_2.weight"], w[p + "ln_2.bias"]
         qkv, bqkv = w[p + "attn.c_attn.weight"].T, w[p + "attn.c_attn.bias"]   # Conv1D stores [in, out]
-        t[f"blk.{i}.wq"], t[f"blk.{i}.wk"], t[f"blk.{i}.wv"] = np.split(np.ascontiguousarray(qkv), 3)
-        t[f"blk.{i}.bq"], t[f"blk.{i}.bk"], t[f"blk.{i}.bv"] = np.split(bqkv, 3)
-        t[f"blk.{i}.wo"], t[f"blk.{i}.bo"] = np.ascontiguousarray(w[p + "attn.c_proj.weight"].T), w[p + "attn.c_proj.bias"]
-        t[f"blk.{i}.w_up"], t[f"blk.{i}.b_up"] = np.ascontiguousarray(w[p + "mlp.c_fc.weight"].T), w[p + "mlp.c_fc.bias"]
-        t[f"blk.{i}.w_down"], t[f"blk.{i}.b_down"] = np.ascontiguousarray(w[p + "mlp.c_proj.weight"].T), w[p + "mlp.c_proj.bias"]
-    m.tokens, tok_flags = hf_tokens(repo, m.vocab)
+        t[b + "wq"], t[b + "wk"], t[b + "wv"] = np.split(np.ascontiguousarray(qkv), 3)
+        t[b + "bq"], t[b + "bk"], t[b + "bv"] = np.split(bqkv, 3)
+        t[b + "wo"], t[b + "bo"] = np.ascontiguousarray(w[p + "attn.c_proj.weight"].T), w[p + "attn.c_proj.bias"]
+        t[b + "w_up"], t[b + "b_up"] = np.ascontiguousarray(w[p + "mlp.c_fc.weight"].T), w[p + "mlp.c_fc.bias"]
+        t[b + "w_down"], t[b + "b_down"] = np.ascontiguousarray(w[p + "mlp.c_proj.weight"].T), w[p + "mlp.c_proj.bias"]
+    m.tokens, tok_flags = hf_tokens(spec.repo, m.vocab)
     m.flags |= tok_flags
     m.bos = m.eos = cfg["eos_token_id"]
     return m
 
 
-def hf_gpt_neo(repo, weights=None):
+def hf_gpt_neo(spec):
     """GPT-2 with Linear layers, no q/k/v bias and no 1/sqrt(hd) attention scale (cancelled in wq); ctx is capped at
     window_size so the local layers are exact."""
-    cfg, w = hf_files(repo, weights)
-    w = {k.removeprefix("transformer."): v for k, v in w.items()}
+    cfg, w = hf_files(spec)
     dim, L, H = cfg["hidden_size"], cfg["num_layers"], cfg["num_heads"]
     ctx = cfg["max_position_embeddings"]
     if "local" in cfg["attention_layers"]:
@@ -234,15 +228,15 @@ def hf_gpt_neo(repo, weights=None):
     t["embed"], t["pos_embed"] = w["wte.weight"], w["wpe.weight"][:ctx]
     t["norm"], t["norm_b"] = w["ln_f.weight"], w["ln_f.bias"]
     for i in range(L):
-        p, a = f"h.{i}.", f"h.{i}.attn.attention."
-        t[f"blk.{i}.attn_norm"], t[f"blk.{i}.attn_norm_b"] = w[p + "ln_1.weight"], w[p + "ln_1.bias"]
-        t[f"blk.{i}.ffn_norm"], t[f"blk.{i}.ffn_norm_b"] = w[p + "ln_2.weight"], w[p + "ln_2.bias"]
-        t[f"blk.{i}.wq"] = w[a + "q_proj.weight"] * np.float32(np.sqrt(dim // H))
-        t[f"blk.{i}.wk"], t[f"blk.{i}.wv"] = w[a + "k_proj.weight"], w[a + "v_proj.weight"]
-        t[f"blk.{i}.wo"], t[f"blk.{i}.bo"] = w[a + "out_proj.weight"], w[a + "out_proj.bias"]
-        t[f"blk.{i}.w_up"], t[f"blk.{i}.b_up"] = w[p + "mlp.c_fc.weight"], w[p + "mlp.c_fc.bias"]
-        t[f"blk.{i}.w_down"], t[f"blk.{i}.b_down"] = w[p + "mlp.c_proj.weight"], w[p + "mlp.c_proj.bias"]
-    m.tokens, tok_flags = hf_tokens(repo, m.vocab)
+        b, p, a = f"blk.{i}.", f"h.{i}.", f"h.{i}.attn.attention."
+        t[b + "attn_norm"], t[b + "attn_norm_b"] = w[p + "ln_1.weight"], w[p + "ln_1.bias"]
+        t[b + "ffn_norm"], t[b + "ffn_norm_b"] = w[p + "ln_2.weight"], w[p + "ln_2.bias"]
+        t[b + "wq"] = w[a + "q_proj.weight"] * np.float32(np.sqrt(dim // H))
+        t[b + "wk"], t[b + "wv"] = w[a + "k_proj.weight"], w[a + "v_proj.weight"]
+        t[b + "wo"], t[b + "bo"] = w[a + "out_proj.weight"], w[a + "out_proj.bias"]
+        t[b + "w_up"], t[b + "b_up"] = w[p + "mlp.c_fc.weight"], w[p + "mlp.c_fc.bias"]
+        t[b + "w_down"], t[b + "b_down"] = w[p + "mlp.c_proj.weight"], w[p + "mlp.c_proj.bias"]
+    m.tokens, tok_flags = hf_tokens(spec.repo, m.vocab)
     m.flags |= tok_flags
     m.bos = m.eos = cfg["eos_token_id"]
     return m
@@ -260,8 +254,6 @@ def chatml(repo, m):
     system = re.search(r"<\|im_start\|>system\n([^'{}<]*)<\|im_end\|>", t)
     m.chat, m.eos = (pieces.index(b"<|im_start|>"), system[1] if system else ""), pieces.index(b"<|im_end|>")
 
-
-# ---------------------------------------------------------------- HF tokenizers: tokenizer.json or tokenizer.model
 
 def hf_tokens(repo, vocab):
     """tokenizer.json, else a SentencePiece tokenizer.model. Returns (tokens, tokenizer flags)."""
@@ -339,13 +331,11 @@ def sentencepiece(path, vocab):
     return tokens + [(b"", NO_MERGE)] * (vocab - len(tokens))
 
 
-# ---------------------------------------------------------------- synthetic
-
 def random(spec):
     """A tiny random model from a spec, with a byte-level tokenizer: 256 bytes, then bos and eos."""
     rng = np.random.default_rng(spec.seed)
     gpt2 = spec.arch == "gpt2"
-    dim, L, H, KV, ffn, vocab = spec.dim, spec.n_layers, spec.n_heads, spec.n_kv_heads, spec.ffn, spec.vocab
+    dim, L, H, KV, ffn, vocab = spec.dim, spec.n_layers, spec.n_heads, spec.n_kv_heads, spec.ffn_dim, spec.vocab
     kvd = dim // H * KV
     flags = (LAYERNORM | LEARNED_POS | GELU if gpt2 else 0) | (TIED if spec.tied else 0)
     m = Model(spec.arch, flags, dim, L, H, KV, ffn, vocab, spec.ctx, 10000.0, 1e-5)
@@ -353,8 +343,8 @@ def random(spec):
     def mat(rows, cols):
         return (rng.standard_normal((rows, cols)) / np.sqrt(cols)).astype(np.float32)
 
-    def vec(n, scale=0.1):
-        return (rng.standard_normal(n) * scale).astype(np.float32)
+    def vec(n):
+        return (rng.standard_normal(n) * 0.1).astype(np.float32)
 
     t = m.tensors
     t["embed"] = mat(vocab, dim)

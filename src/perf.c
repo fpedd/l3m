@@ -1,4 +1,3 @@
-// Timers from rdtsc; counters from perf_event_open (amd_l3, amd_umc, RAPL) and resctrl.
 #include <dirent.h>
 #include <errno.h>
 #include <linux/perf_event.h>
@@ -34,8 +33,6 @@ double l3m_ns_per_tick(void) {
 
 double l3m_now_ns(void) { return (double)__rdtsc() * l3m_ns_per_tick(); }
 
-// ---- hardware counters --------------------------------------------------------------------
-
 #define MAX_FDS 16
 
 struct l3m_hwcounters {
@@ -70,7 +67,7 @@ static int open_event(int type, uint64_t config, int cpu) {
     struct perf_event_attr a = {0};
     a.type = (uint32_t)type; a.size = sizeof a; a.config = config;
     int fd = (int)syscall(SYS_perf_event_open, &a, -1, cpu, -1, 0);
-    if (fd < 0 && verbose) fprintf(stderr, "perf: type %d config %#lx on cpu %d: %s\n", type, (unsigned long)config, cpu, strerror(errno));
+    if (fd < 0 && verbose) fprintf(stderr, "l3m: perf: type %d config %#lx on cpu %d: %s\n", type, (unsigned long)config, cpu, strerror(errno));
     return fd;
 }
 
@@ -97,7 +94,6 @@ static uint64_t read_sum(const int *fds, int n) {
     return sum;
 }
 
-// LLC occupancy: as root, from a monitoring group of this process's threads; otherwise machine-wide.
 #define RESCTRL "/sys/fs/resctrl"
 
 static int write_str(const char *path, const char *s) {
