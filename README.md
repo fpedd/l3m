@@ -13,8 +13,8 @@ Each core of a modern desktop CPU reads its L2 and L3 at around 100 GB/s, so 16 
 together stream about 1.6 TB/s. Dual-channel DDR5 delivers 60 to 90 GB/s, shared by all of them.
 l3m shards every weight matrix across the cores until each shard fits in its core's cache,
 then streams the weights from there on every token. For models that fit, token generation
-runs 3 to 5 times faster than llama.cpp on the same cores, which suits draft models for speculative
-decoding and small classifiers or routers. l3m runs on Linux, on x86-64 CPUs with AVX2.
+runs 3 to 5 times faster than llama.cpp on the same cores. l3m runs on Linux, on x86-64 CPUs
+with AVX2.
 
 ## Quick start
 
@@ -41,10 +41,10 @@ each core's budget, and `./l3m check stories15M.l3m` compares the output against
 
 ## Results
 
-For these small models, llama.cpp also reads most of its weights from cache, but at 80 to 140 GB/s,
-where l3m reaches 330 to 500 GB/s. Evicting l3m's weights before every token (`--cold`) makes it
-6 to 8 times slower. The speedup holds as long as the model fits in cache. Once it outgrows the
-cache, more and more of its weights come from DRAM, and the lead shrinks toward what the memory
+For these small models, llama.cpp also runs mostly from cache, at 80 to 140 GB/s, where l3m
+reaches 330 to 500 GB/s: each core keeps the same rows from token to token, and the cores
+synchronize 4 times per layer. Evicting l3m's weights before every token (`--cold`) makes it
+6 to 8 times slower. Once a model outgrows the cache, the lead shrinks toward what the memory
 bus allows.
 
 | model                              | cores | l3m tok/s | llama.cpp tok/s | speedup | l3m from DRAM |
@@ -59,8 +59,9 @@ Measured on a Ryzen 9 7950X (16 cores, 2 x 32 MiB L3, DDR5-5600): 256 greedy tok
 median of 7 runs, `sudo ./l3m bench <file> --cores 0-7 -n 256` (or `0-15`). Every model is
 exported with `--head-dtype` equal to its `--dtype`. llama.cpp (master of 2026-09-25) runs GGUFs
 of the same dtypes, made with `llama-quantize --pure`, under `llama-bench -p 0 -n 256`, pinned
-to the same cores. "From DRAM" is memory-controller reads as a share of the weight bytes
-l3m streams per token.
+to the same cores. "From DRAM" is machine-wide memory-controller reads as a share of the weight
+bytes l3m streams per token. Against fp32, bf16 and q8_0 stay within 0.2% perplexity, and q4_0
+costs stories110M 1.8% (`bench/ppl.py`).
 
 ## Prior work
 
