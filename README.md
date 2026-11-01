@@ -10,7 +10,7 @@
 
 l3m is a minimal inference engine that keeps small language models entirely in CPU cache. Each
 core of a modern desktop CPU reads its L2 and L3 at around 100 GB/s, so 16 cores together
-stream about 1.6 TB/s. Dual-channel DDR5 delivers 60 to 90 GB/s, shared by all of them, so a
+stream about 1.6 TB/s. Dual-channel DDR5 delivers 60 to 90 GB/s, shared by all of them. So a
 model that stays in cache can be read many times faster than one in DRAM. l3m shards every
 weight matrix across the cores until each shard fits in its core's cache, then streams the
 weights from there on every token. For models that fit, token generation runs 3 to 5 times
