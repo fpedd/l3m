@@ -8,13 +8,13 @@
   <img src="https://img.shields.io/badge/C11-GCC%20%7C%20clang-blue" alt="C11">
 </p>
 
-l3m is a minimal inference engine that keeps small language models entirely in CPU cache.
-Each core of a modern desktop CPU reads its L2 and L3 at around 100 GB/s, so 16 cores
-together stream about 1.6 TB/s. Dual-channel DDR5 delivers 60 to 90 GB/s, shared by all of them.
-l3m shards every weight matrix across the cores until each shard fits in its core's cache,
-then streams the weights from there on every token. For models that fit, token generation
-runs 3 to 5 times faster than llama.cpp on the same cores. l3m runs on Linux, on x86-64 CPUs
-with AVX2.
+l3m is a minimal inference engine that keeps small language models entirely in CPU cache. Each
+core of a modern desktop CPU reads its L2 and L3 at around 100 GB/s, so 16 cores together
+stream about 1.6 TB/s. Dual-channel DDR5 delivers 60 to 90 GB/s, shared by all of them, so a
+model that stays in cache can be read many times faster than one in DRAM. l3m shards every
+weight matrix across the cores until each shard fits in its core's cache, then streams the
+weights from there on every token. For models that fit, token generation runs 3 to 5 times
+faster than llama.cpp on the same cores. l3m runs on Linux, on x86-64 CPUs with AVX2.
 
 ## Quick start
 
@@ -41,11 +41,11 @@ each core's budget, and `./l3m check stories15M.l3m` compares the output against
 
 ## Results
 
-For the models that fit, llama.cpp streams the weights at 80 to 140 GB/s, where l3m reaches
-330 to 500 GB/s: each core keeps the same rows from token to token, and the cores
-synchronize 4 times per layer. Evicting l3m's weights before every token (`--cold`) makes it
-6 to 8 times slower. Once a model outgrows the cache, the lead shrinks toward what the memory
-bus allows.
+For the models that fit the CPU caches, llama.cpp streams the weights at 80 to 140 GB/s, where
+l3m reaches 330 to 500 GB/s: each core keeps the same rows from token to token, and the cores
+synchronize 4 times per layer. As a sanity check, `--cold` evicts l3m's weights before every
+token, which makes it 6 to 8 times slower. Once a model outgrows the cache, the lead shrinks
+toward what the memory bus allows.
 
 | model                              | cores | l3m tok/s | llama.cpp tok/s | speedup | l3m from DRAM |
 | ---------------------------------- | ----: | --------: | --------------: | ------: | ------------: |
@@ -71,7 +71,7 @@ The closest prior work is
 each matmul by output channel across a socket's cores and pipelines layers across servers. On
 Llama-3.2-3B and Llama-2-7B it reports 2 to 11.5x lower time per token than llama.cpp. However,
 I could not find any public code for it. This project, l3m, is partly inspired by it: the same
-output-sharded, cache-resident GEMV, on one consumer CPU and open source. SRAM-based accelerators
+output-sharded, cache-resident matmul, on one consumer CPU and open source. SRAM-based accelerators
 such as the Cerebras wafer-scale engine, Groq's LPU and d-Matrix's Corsair apply a similar
 "entire model in SRAM" idea to achieve blazing fast inference.
 
